@@ -6,3 +6,4 @@ streamlit-autorefresh
 earthengine-api
 geemap==0.22.1
 google-auth
+setuptools>=70.0.0
