@@ -3,7 +3,7 @@ requests
 folium
 streamlit-folium
 streamlit-autorefresh
-earthengine-api>=0.1.326
+earthengine-api
 geemap>=0.25
 google-auth
 setuptools>=70.0.0
