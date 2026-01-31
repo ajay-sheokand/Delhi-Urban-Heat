@@ -5,7 +5,7 @@ from streamlit_folium import st_folium
 from streamlit_autorefresh import st_autorefresh
 
 import ee
-import geemap.foliumap as geemap  # safe import for folium backend
+from google.oauth2 import service_account
 
 st_autorefresh(interval=60000)
 
@@ -14,13 +14,10 @@ st.markdown("""
 This dashboard combines:
 - **Real-Time Air temperature** (OpenWeather API)
 - **Satellite-Derived Land Surface Temperature** (MODIS LST)
-
 Covering **Delhi + NCR Region**.
 """)
 
 API_KEY = st.secrets["OPENWEATHER_API_KEY"]
-
-from google.oauth2 import service_account
 
 # Load Earth Engine credentials
 service_account_info = {
@@ -52,19 +49,29 @@ lst = (
 
 lst_celsius = lst.multiply(0.02).subtract(273.15)
 
-# Create folium map
-Map = geemap.Map(center=[28.6139, 77.209], zoom=8, ee_initialize=False)
+# Create a plain Folium map
+m = folium.Map(location=[28.6139, 77.209], zoom_start=8)
 
-# Add MODIS layer
-Map.addLayer(
-    lst_celsius.clip(region),
-    {
-        "min": 25,
-        "max": 50,
-        "palette": ["blue", "green", "yellow", "orange", "red"],
-    },
-    "MODIS LST (°C)"
-)
+# Function to add Earth Engine layer to Folium
+def add_ee_layer(self, ee_image_object, vis_params, name):
+    map_id_dict = ee.Image(ee_image_object).getMapId(vis_params)
+    folium.raster_layers.TileLayer(
+        tiles=map_id_dict['tile_fetcher'].url_format,
+        attr='Google Earth Engine',
+        name=name,
+        overlay=True,
+        control=True
+    ).add_to(self)
+
+folium.Map.add_ee_layer = add_ee_layer
+
+# Add MODIS LST layer
+vis_params = {
+    "min": 25,
+    "max": 50,
+    "palette": ["blue", "green", "yellow", "orange", "red"],
+}
+m.add_ee_layer(lst_celsius.clip(region), vis_params, "MODIS LST (°C)")
 
 # Locations for weather monitoring
 locations = [
@@ -109,11 +116,12 @@ Status: {alert}
         location=[lat, lon],
         popup=popup,
         icon=folium.Icon(color="red" if w["temperature"] >= 35 else "green"),
-    ).add_to(Map)
+    ).add_to(m)
 
 # Render map in Streamlit
-st_folium(Map, width=800, height=500)
+st_folium(m, width=800, height=500)
 
+# Live heat alerts
 st.subheader("Live Heat Alerts for Delhi-NCR Region")
 for name, lat, lon in locations:
     w = get_weather(lat, lon)
