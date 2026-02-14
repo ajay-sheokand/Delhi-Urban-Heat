@@ -1,21 +1,20 @@
-# Münster Urban Heat Monitoring Dashboard
+# Delhi-NCR Urban Heat Monitoring Dashboard
 
-A real-time web application for monitoring urban heat in Münster, Germany using satellite data and weather APIs.
+A real-time web application for monitoring urban heat in Delhi-NCR region using satellite data and weather APIs.
 
-Link: https://munster-urban-heat.streamlit.app/
 ## Overview
 
-This Streamlit dashboard combines real-time air temperature data from the OpenWeather API with satellite-derived Land Surface Temperature (LST) from NASA's MODIS satellite to provide comprehensive urban heat monitoring for Münster and the North Rhine-Westphalia (NRW) region.
+This Streamlit dashboard combines real-time air temperature data from the OpenWeather API with satellite-derived Land Surface Temperature (LST) from NASA's MODIS satellite to provide comprehensive urban heat monitoring for Delhi + NCR Region.
 
 ## Features
 
-- **Interactive Map Visualization**: Folium-based map centered on Münster showing the current region of interest with zoom level optimized for city-level analysis
-- **Real-Time Weather Data**: Live air temperature, humidity, and "feels like" temperature for 5 key districts in Münster:
-  - Altstadt (City Center)
-  - Kreuzviertel (Cultural Quarter)
-  - Mauritz (South District)
-  - Gievenbeck (North District)
-  - Kinderhaus (East District)
+- **Interactive Map Visualization**: Folium-based map centered on Delhi showing the current region of interest with zoom level optimized for city-level analysis
+- **Real-Time Weather Data**: Live air temperature, humidity, and "feels like" temperature for 5 key cities in Delhi-NCR:
+  - Delhi (Capital)
+  - Gurgaon (Haryana)
+  - Noida (Uttar Pradesh)
+  - Faridabad (Haryana)
+  - Ghaziabad (Uttar Pradesh)
 - **Satellite Temperature Overlay**: MODIS Land Surface Temperature (LST) data visualized on the map with a color gradient (blue to red) representing temperature ranges
 - **Time Series Analysis**: Historical analysis of MODIS LST data with:
   - Customizable date range selector (default: last 60 days)
@@ -139,7 +138,12 @@ The app will open in your default browser at `http://localhost:8501`
    - Date range selector
    - Interactive Plotly chart
    - Statistical metrics
-4. **Live Heat Alerts**: Current conditions for all 5 districts
+4. **Spatial Distribution Analysis**:
+   - Temperature distribution across cities
+   - Urban Heat Island (UHI) intensity analysis
+   - Heat distribution map with temperature-based colors
+   - Detailed city comparison table
+5. **Live Heat Alerts**: Current conditions for all 5 NCR cities
 
 ## Troubleshooting
 
@@ -151,8 +155,8 @@ The app will open in your default browser at `http://localhost:8501`
 **Error: "Error fetching time series data"**
 - Solution: Check GEE credentials and ensure service account has Earth Engine access
 
-**Map not centering on Münster**
-- Solution: Verify zoom_start parameter is set to 11 (city-level zoom)
+**Map not centering on Delhi**
+- Solution: Verify zoom_start parameter is set to 10 (city-level zoom)
 
 **No MODIS data available**
 - Solution: Check date range selection and ensure data exists for the period
@@ -163,7 +167,7 @@ The app will open in your default browser at `http://localhost:8501`
 - Historical trend analysis and alerts
 - Export capabilities for temperature data
 - Integration with additional climate datasets
-- Urban heat island effect analysis
+- Advanced urban heat island effect analysis
 - Predictive temperature modeling
 
 ## Dependencies
@@ -184,11 +188,12 @@ See `requirements.txt` for complete list:
 
 ## Author
 
-Ajay
+University Work Project - 1-DELHIurbanHEAT
 
 ## Contact
 
 For issues or questions about this dashboard, please refer to the project documentation or contact the development team.
 
 ---
-**Dashboard Coverage**: Münster, North Rhine-Westphalia (NRW), Germany
+**Last Updated**: February 2026
+**Dashboard Coverage**: Delhi-NCR Region, India

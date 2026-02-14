@@ -14,12 +14,12 @@ from google.oauth2 import service_account
 st.set_page_config(layout="wide")
 st_autorefresh(interval=60000)
 
-st.title("Münster Urban Heat Monitoring Dashboard")
+st.title("Delhi-NCR Urban Heat Monitoring Dashboard")
 st.markdown("""
 This dashboard combines:
 - **Real-Time Air temperature** (OpenWeather API)
 - **Satellite-Derived Land Surface Temperature** (MODIS LST)
-Covering **Münster and North Rhine-Westphalia (NRW), Germany**.
+Covering **Delhi + NCR Region**.
 """)
 
 API_KEY = st.secrets["OPENWEATHER_API_KEY"]
@@ -39,9 +39,9 @@ credentials = service_account.Credentials.from_service_account_info(
 
 ee.Initialize(credentials)
 
-# Define Münster/NRW region
+# Define Delhi-NCR region
 #region = ee.Geometry.Rectangle([76.84, 27.39, 78.57, 28.88])
-region = ee.Geometry.Rectangle([5.5, 50.8, 8.5, 52.5])
+region = ee.Geometry.Rectangle([76.84, 27.39, 78.57, 28.88])
 
 
 st.subheader("MODIS Satellite-Derived Daily Land Surface Temperature (LST)")
@@ -57,7 +57,7 @@ lst = (
 lst_celsius = lst.multiply(0.02).subtract(273.15)
 
 # Create a plain Folium map
-m = folium.Map(location=[51.9607, 7.6261], zoom_start=11)
+m = folium.Map(location=[28.6139, 77.2090], zoom_start=10)
 
 # Function to add Earth Engine layer to Folium
 def add_ee_layer(self, ee_image_object, vis_params, name, opacity=1.0):
@@ -97,13 +97,13 @@ else:
     )
     m.add_ee_layer(lst_smooth.clip(region), vis_params, "MODIS LST Smooth Heat Map(°C)", opacity=0.5)
 
-# Locations for weather monitoring - Münster districts
+# Locations for weather monitoring - Delhi-NCR cities
 locations = [
-    ("Altstadt", 51.9626, 7.6255),
-    ("Kreuzviertel", 51.9714, 7.5989),
-    ("Mauritz", 51.9476, 7.6344),
-    ("Gievenbeck", 51.9969, 7.5936),
-    ("Kinderhaus", 51.9890, 7.6700),
+    ("Delhi", 28.6139, 77.2090),
+    ("Gurgaon", 28.4595, 77.0266),
+    ("Noida", 28.5355, 77.3910),
+    ("Faridabad", 28.4089, 77.3178),
+    ("Ghaziabad", 28.6692, 77.4538),
 ]
 
 # Function to get live weather
@@ -217,7 +217,7 @@ try:
         ))
         
         fig.update_layout(
-            title='MODIS Land Surface Temperature Time Series (Münster Region)',
+            title='MODIS Land Surface Temperature Time Series (Delhi-NCR Region)',
             xaxis_title='Date',
             yaxis_title='Temperature (°C)',
             hovermode='x unified',
@@ -243,8 +243,216 @@ try:
 except Exception as e:
     st.error(f"Error fetching time series data: {str(e)}")
 
+# Spatial Distribution Analysis
+st.subheader("Spatial Distribution Analysis - Temperature Variation Across Districts")
 
-st.subheader("Live Heat Alerts for Münster and NRW Region")
+try:
+    # Fetch current weather for all districts
+    district_temps = []
+    for name, lat, lon in locations:
+        w = get_weather(lat, lon)
+        district_temps.append({
+            'District': name,
+            'Temperature': w['temperature'],
+            'Feels Like': w['feels_like'],
+            'Humidity': w['humidity'],
+            'Latitude': lat,
+            'Longitude': lon
+        })
+    
+    df_spatial = pd.DataFrame(district_temps)
+    
+    # Create visualizations
+    col1, col2 = st.columns(2)
+    
+    # Spatial heatmap - Bar chart showing temperature distribution
+    with col1:
+        fig_bar = go.Figure()
+        fig_bar.add_trace(go.Bar(
+            x=df_spatial['District'],
+            y=df_spatial['Temperature'],
+            marker=dict(
+                color=df_spatial['Temperature'],
+                colorscale='RdYlBu_r',
+                colorbar=dict(title="Temp (°C)"),
+                showscale=True
+            ),
+            text=df_spatial['Temperature'].round(2),
+            textposition='outside',
+            name='Temperature'
+        ))
+        
+        fig_bar.update_layout(
+            title='Current Temperature Distribution Across Districts',
+            xaxis_title='District',
+            yaxis_title='Temperature (°C)',
+            height=400,
+            template='plotly_white',
+            showlegend=False
+        )
+        
+        st.plotly_chart(fig_bar, use_container_width=True)
+    
+    # Scatter plot - showing temperature vs feels like
+    with col2:
+        fig_scatter = go.Figure()
+        fig_scatter.add_trace(go.Scatter(
+            x=df_spatial['Temperature'],
+            y=df_spatial['Feels Like'],
+            mode='markers+text',
+            marker=dict(
+                size=15,
+                color=df_spatial['Temperature'],
+                colorscale='RdYlBu_r',
+                showscale=True,
+                colorbar=dict(title="Temp (°C)")
+            ),
+            text=df_spatial['District'],
+            textposition='top center',
+            name='Districts'
+        ))
+        
+        fig_scatter.update_layout(
+            title='Temperature vs Feels Like Temperature',
+            xaxis_title='Actual Temperature (°C)',
+            yaxis_title='Feels Like Temperature (°C)',
+            height=400,
+            template='plotly_white'
+        )
+        
+        st.plotly_chart(fig_scatter, use_container_width=True)
+    
+    # Spatial statistics
+    st.subheader("Spatial Temperature Statistics")
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        st.metric("Max Temp District", df_spatial.loc[df_spatial['Temperature'].idxmax(), 'District'], 
+                 f"{df_spatial['Temperature'].max():.1f}°C")
+    with col2:
+        st.metric("Min Temp District", df_spatial.loc[df_spatial['Temperature'].idxmin(), 'District'],
+                 f"{df_spatial['Temperature'].min():.1f}°C")
+    with col3:
+        temp_range = df_spatial['Temperature'].max() - df_spatial['Temperature'].min()
+        st.metric("Temperature Range", f"{temp_range:.1f}°C", 
+                 f"(Spatial Variation)")
+    with col4:
+        st.metric("Avg Temperature", f"{df_spatial['Temperature'].mean():.1f}°C",
+                 f"(All Districts)")
+    with col5:
+        st.metric("Avg Humidity", f"{df_spatial['Humidity'].mean():.0f}%",
+                 f"(All Districts)")
+    
+    # Detailed district comparison table
+    st.subheader("Detailed District Comparison")
+    
+    df_display = df_spatial[['District', 'Temperature', 'Feels Like', 'Humidity']].copy()
+    df_display['Temp Anomaly'] = df_display['Temperature'] - df_display['Temperature'].mean()
+    df_display['Temperature'] = df_display['Temperature'].round(2)
+    df_display['Feels Like'] = df_display['Feels Like'].round(2)
+    df_display['Humidity'] = df_display['Humidity'].round(0).astype(int)
+    df_display['Temp Anomaly'] = df_display['Temp Anomaly'].round(2)
+    
+    st.dataframe(df_display, use_container_width=True)
+    
+    # Heat gradient map visualization
+    st.subheader("Heat Distribution Map")
+    
+    # Create map with temperature-based colors
+    m_heat = folium.Map(location=[51.9607, 7.6261], zoom_start=11)
+    
+    # Add districts with color intensity based on temperature
+    for idx, row in df_spatial.iterrows():
+        # Normalize temperature to 0-1 for color mapping
+        temp_normalized = (row['Temperature'] - df_spatial['Temperature'].min()) / (df_spatial['Temperature'].max() - df_spatial['Temperature'].min())
+        
+        # Color mapping: blue (cold) to red (hot)
+        if temp_normalized < 0.33:
+            color = 'blue'
+        elif temp_normalized < 0.66:
+            color = 'orange'
+        else:
+            color = 'red'
+        
+        popup_text = f"""
+<b>{row['District']}</b><br>
+Temperature: {row['Temperature']:.1f}°C<br>
+Feels Like: {row['Feels Like']:.1f}°C<br>
+Humidity: {row['Humidity']:.0f}%<br>
+Anomaly: {row['Temperature'] - df_spatial['Temperature'].mean():+.2f}°C
+"""
+        
+        folium.CircleMarker(
+            location=[row['Latitude'], row['Longitude']],
+            radius=20,
+            popup=folium.Popup(popup_text, max_width=250),
+            color=color,
+            fill=True,
+            fillColor=color,
+            fillOpacity=0.7,
+            weight=2,
+            opacity=0.9
+        ).add_to(m_heat)
+    
+    st_folium(m_heat, width=1500, height=600)
+    
+    # Urban Heat Island Analysis
+    st.subheader("Urban Heat Island (UHI) Analysis")
+    
+    mean_temp = df_spatial['Temperature'].mean()
+    df_uhi = df_spatial.copy()
+    df_uhi['UHI Intensity'] = df_uhi['Temperature'] - mean_temp
+    
+    # Create UHI intensity chart
+    fig_uhi = go.Figure()
+    colors = ['red' if x > 0 else 'blue' for x in df_uhi['UHI Intensity']]
+    
+    fig_uhi.add_trace(go.Bar(
+        x=df_uhi['District'],
+        y=df_uhi['UHI Intensity'],
+        marker=dict(color=colors),
+        text=df_uhi['UHI Intensity'].round(2),
+        textposition='outside',
+        name='UHI Intensity'
+    ))
+    
+    fig_uhi.update_layout(
+        title='Urban Heat Island Intensity (Deviation from Mean)',
+        xaxis_title='District',
+        yaxis_title='Temperature Anomaly (°C)',
+        height=400,
+        template='plotly_white',
+        hovermode='x unified',
+        showlegend=False
+    )
+    
+    fig_uhi.add_hline(y=0, line_dash="dash", line_color="gray")
+    
+    st.plotly_chart(fig_uhi, use_container_width=True)
+    
+    # UHI Summary
+    hottest_district = df_uhi.loc[df_uhi['UHI Intensity'].idxmax()]
+    coolest_district = df_uhi.loc[df_uhi['UHI Intensity'].idxmin()]
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.info(f"""
+        **Hottest Zone**: {hottest_district['District']}
+        - Temperature Anomaly: +{hottest_district['UHI Intensity']:.2f}°C (above mean)
+        - Actual Temperature: {hottest_district['Temperature']:.1f}°C
+        """)
+    with col2:
+        st.info(f"""
+        **Coolest Zone**: {coolest_district['District']}
+        - Temperature Anomaly: {coolest_district['UHI Intensity']:.2f}°C (below mean)
+        - Actual Temperature: {coolest_district['Temperature']:.1f}°C
+        """)
+
+except Exception as e:
+    st.error(f"Error in spatial distribution analysis: {str(e)}")
+
+
+st.subheader("Live Heat Alerts for Delhi-NCR Region")
 for name, lat, lon in locations:
     w = get_weather(lat, lon)
     st.write(f"**{name}**: {w['temperature']} °C, Feels Like: {w['feels_like']} °C, Humidity: {w['humidity']} %")
