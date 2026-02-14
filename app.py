@@ -359,7 +359,7 @@ try:
     st.subheader("Heat Distribution Map")
     
     # Create map with temperature-based colors
-    m_heat = folium.Map(location=[51.9607, 7.6261], zoom_start=11)
+    m_heat = folium.Map(location=[28.6139, 77.2090], zoom_start=10)
     
     # Add districts with color intensity based on temperature
     for idx, row in df_spatial.iterrows():
