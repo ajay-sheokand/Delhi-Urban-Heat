@@ -180,19 +180,14 @@ See `requirements.txt` for complete list:
 - pandas
 - plotly
 
-## License
-
-This project is part of university coursework.
 
 ## Author
 
-University Work Project - 1-DELHIurbanHEAT
+Ajay
 
 ## Contact
 
 For issues or questions about this dashboard, please refer to the project documentation or contact the development team.
 
 ---
-
-**Last Updated**: February 2026
 **Dashboard Coverage**: Münster, North Rhine-Westphalia (NRW), Germany
