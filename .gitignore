@@ -1,2 +1,6 @@
 /gee-streamlit-service-dca01b062e23.json
 /.streamlit/secrets.toml
+
+# Large geospatial files that exceed GitHub limits
+/archive/
+/geoBoundaries-IND-ADM3-all/
