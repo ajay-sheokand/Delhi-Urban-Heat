@@ -1366,6 +1366,93 @@ try:
                 # Visualizations
                 st.subheader("Correlation Visualizations")
                 
+                # First row: Area coverage visualizations
+                col1, col2 = st.columns([1, 1], gap="medium")
+                
+                # Land cover area distribution (pie chart)
+                with col1:
+                    # Calculate area coverage (number of pixels as proxy for area)
+                    lulc_area = df_corr['LandCover_Name'].value_counts()
+                    total_samples = len(df_corr)
+                    lulc_area_pct = (lulc_area / total_samples * 100).round(2)
+                    
+                    # Color mapping for land cover
+                    lulc_colors = {
+                        'Tree Cover': '#006400',
+                        'Shrubland': '#FFBB22',
+                        'Grassland': '#FFFF4C',
+                        'Cropland': '#F096FF',
+                        'Built-up': '#FA0000',
+                        'Bare/Sparse': '#B4B4B4',
+                        'Snow/Ice': '#F0F0F0',
+                        'Water': '#0064C8',
+                        'Wetland': '#0096A0',
+                        'Mangroves': '#00CF75',
+                        'Moss/Lichen': '#FAE6A0'
+                    }
+                    
+                    colors_list = [lulc_colors.get(name, '#999999') for name in lulc_area.index]
+                    
+                    fig_pie = go.Figure(data=[go.Pie(
+                        labels=lulc_area.index,
+                        values=lulc_area.values,
+                        marker=dict(colors=colors_list),
+                        textposition='inside',
+                        textinfo='label+percent',
+                        hovertemplate='<b>%{label}</b><br>Coverage: %{percent}<br>Samples: %{value}<extra></extra>'
+                    )])
+                    
+                    fig_pie.update_layout(
+                        title='Land Use/Land Cover Distribution',
+                        height=450,
+                        template='plotly_white',
+                        showlegend=True
+                    )
+                    
+                    st.plotly_chart(fig_pie, width='stretch')
+                
+                # Area-weighted temperature by land cover
+                with col2:
+                    # Create bar chart with area coverage and temperature
+                    lulc_summary = df_corr.groupby('LandCover_Name').agg({
+                        'LST': 'mean',
+                        'LandCover': 'count'
+                    }).rename(columns={'LandCover': 'Area_Count'})
+                    
+                    lulc_summary['Area_Percent'] = (lulc_summary['Area_Count'] / len(df_corr) * 100).round(2)
+                    lulc_summary = lulc_summary.sort_values('Area_Percent', ascending=True)
+                    
+                    fig_area_temp = go.Figure()
+                    
+                    # Bar for area coverage
+                    fig_area_temp.add_trace(go.Bar(
+                        y=lulc_summary.index,
+                        x=lulc_summary['Area_Percent'],
+                        name='Area Coverage (%)',
+                        orientation='h',
+                        marker=dict(
+                            color=lulc_summary['LST'],
+                            colorscale='RdYlBu_r',
+                            showscale=True,
+                            colorbar=dict(title="Temp (°C)", x=1.15)
+                        ),
+                        text=lulc_summary['Area_Percent'].apply(lambda x: f'{x:.1f}%'),
+                        textposition='auto',
+                        hovertemplate='<b>%{y}</b><br>Coverage: %{x:.1f}%<br>Avg Temp: %{marker.color:.1f}°C<extra></extra>'
+                    ))
+                    
+                    fig_area_temp.update_layout(
+                        title='Land Cover Area Coverage (colored by temperature)',
+                        xaxis_title='Area Coverage (%)',
+                        yaxis_title='Land Use Type',
+                        height=450,
+                        template='plotly_white',
+                        showlegend=False
+                    )
+                    
+                    st.plotly_chart(fig_area_temp, width='stretch')
+                
+                # Second row: Correlation visualizations
                 col1, col2 = st.columns([1, 1], gap="medium")
                 
                 # NDVI vs LST scatter plot
@@ -1376,12 +1463,16 @@ try:
                     for lc_code, lc_name in lulc_names.items():
                         df_lc = df_corr[df_corr['LandCover'] == lc_code]
                         if len(df_lc) > 0:
+                            # Calculate size based on area coverage
+                            area_pct = (len(df_lc) / len(df_corr)) * 100
+                            marker_size = max(6, min(15, area_pct * 2))  # Scale size by coverage
+                            
                             fig_scatter.add_trace(go.Scatter(
                                 x=df_lc['NDVI'],
                                 y=df_lc['LST'],
                                 mode='markers',
-                                name=lc_name,
-                                marker=dict(size=8, opacity=0.6)
+                                name=f'{lc_name} ({area_pct:.1f}%)',
+                                marker=dict(size=marker_size, opacity=0.6)
                             ))
                     
                     # Add trend line
@@ -1432,23 +1523,50 @@ try:
                     st.plotly_chart(fig_box, width='stretch')
                 
                 # Land cover statistics table
-                st.subheader("Temperature Statistics by Land Use Type")
+                st.subheader("Temperature & Area Statistics by Land Use Type")
                 
-                lulc_stats = df_corr.groupby('LandCover_Name')['LST'].agg([
-                    ('Count', 'count'),
-                    ('Mean Temp (°C)', 'mean'),
-                    ('Std Dev', 'std'),
-                    ('Min Temp (°C)', 'min'),
-                    ('Max Temp (°C)', 'max')
-                ]).round(2)
+                # Calculate comprehensive statistics including area coverage
+                lulc_stats = df_corr.groupby('LandCover_Name').agg({
+                    'LST': ['count', 'mean', 'std', 'min', 'max'],
+                    'NDVI': 'mean'
+                }).round(2)
                 
-                lulc_stats = lulc_stats.sort_values('Mean Temp (°C)', ascending=False)
-                st.dataframe(lulc_stats, width='stretch')
+                # Flatten column names
+                lulc_stats.columns = ['Sample Count', 'Mean Temp (°C)', 'Std Dev', 'Min Temp (°C)', 'Max Temp (°C)', 'Avg NDVI']
+                
+                # Add area coverage percentage
+                lulc_stats['Area Coverage (%)'] = (lulc_stats['Sample Count'] / len(df_corr) * 100).round(2)
+                
+                # Reorder columns
+                lulc_stats = lulc_stats[['Sample Count', 'Area Coverage (%)', 'Mean Temp (°C)', 'Avg NDVI', 'Std Dev', 'Min Temp (°C)', 'Max Temp (°C)']]
+                
+                # Sort by area coverage (descending)
+                lulc_stats = lulc_stats.sort_values('Area Coverage (%)', ascending=False)
+                
+                # Style the dataframe
+                st.dataframe(
+                    lulc_stats.style.background_gradient(subset=['Mean Temp (°C)'], cmap='RdYlBu_r')
+                                   .background_gradient(subset=['Area Coverage (%)'], cmap='Greens'),
+                    width='stretch'
+                )
                 
                 # Key Insights
                 st.subheader("🔍 Key Insights")
                 
                 insights = []
+                
+                # Area coverage insights
+                if len(lulc_stats) > 0:
+                    # Get dominant land cover by area
+                    dominant_lc = lulc_stats.index[0]
+                    dominant_pct = lulc_stats.iloc[0]['Area Coverage (%)']
+                    dominant_temp = lulc_stats.iloc[0]['Mean Temp (°C)']
+                    
+                    insights.append(
+                        f"🏆 **Dominant Land Cover**: {dominant_lc} covers the largest area ({dominant_pct:.1f}%) "
+                        f"with an average temperature of {dominant_temp:.1f}°C. This land use type has the "
+                        f"greatest influence on overall urban heat patterns."
+                    )
                 
                 # NDVI-LST correlation insight
                 if corr_ndvi_lst < -0.3:
@@ -1462,29 +1580,53 @@ try:
                         f"({corr_ndvi_lst:.3f}) shows vegetation provides some cooling, but other factors also matter."
                     )
                 
-                # Urban heat island insight
+                # Urban heat island insight with area context
                 if urban_temp > 0 and veg_temp > 0 and (urban_temp - veg_temp) > 2:
+                    # Calculate built-up area percentage
+                    built_up_pct = lulc_stats.loc['Built-up', 'Area Coverage (%)'] if 'Built-up' in lulc_stats.index else 0
+                    
                     insights.append(
-                        f"🔥 **Significant Urban Heat Island**: Built-up areas are {(urban_temp - veg_temp):.1f}°C hotter "
-                        f"than vegetated areas on average, highlighting the need for urban greening strategies."
+                        f"🔥 **Significant Urban Heat Island**: Built-up areas (covering {built_up_pct:.1f}% of the region) "
+                        f"are {(urban_temp - veg_temp):.1f}°C hotter than vegetated areas on average, highlighting the "
+                        f"need for urban greening strategies."
                     )
                 
-                # Hottest land cover
+                # Temperature extreme by area-weighted impact
                 if len(lulc_stats) > 0:
-                    hottest_lc = lulc_stats.index[0]
-                    hottest_temp = lulc_stats.iloc[0]['Mean Temp (°C)']
+                    # Sort by mean temp to find hottest
+                    lulc_by_temp = lulc_stats.sort_values('Mean Temp (°C)', ascending=False)
+                    hottest_lc = lulc_by_temp.index[0]
+                    hottest_temp = lulc_by_temp.iloc[0]['Mean Temp (°C)']
+                    hottest_area = lulc_by_temp.iloc[0]['Area Coverage (%)']
+                    
                     insights.append(
-                        f"🌡️ **Hottest Land Cover Type**: {hottest_lc} areas show the highest average temperature "
-                        f"({hottest_temp:.1f}°C), indicating priority zones for cooling interventions."
+                        f"🌡️ **Hottest Land Cover**: {hottest_lc} areas show the highest average temperature "
+                        f"({hottest_temp:.1f}°C) and cover {hottest_area:.1f}% of the study area, "
+                        f"indicating priority zones for cooling interventions."
                     )
                 
-                # Coolest land cover
+                # Coolest land cover with area context
                 if len(lulc_stats) > 1:
-                    coolest_lc = lulc_stats.index[-1]
-                    coolest_temp = lulc_stats.iloc[-1]['Mean Temp (°C)']
+                    lulc_by_temp = lulc_stats.sort_values('Mean Temp (°C)', ascending=False)
+                    coolest_lc = lulc_by_temp.index[-1]
+                    coolest_temp = lulc_by_temp.iloc[-1]['Mean Temp (°C)']
+                    coolest_area = lulc_by_temp.iloc[-1]['Area Coverage (%)']
+                    
                     insights.append(
-                        f"❄️ **Coolest Land Cover Type**: {coolest_lc} areas maintain the lowest temperatures "
-                        f"({coolest_temp:.1f}°C), demonstrating effective natural cooling."
+                        f"❄️ **Coolest Land Cover**: {coolest_lc} areas maintain the lowest temperatures "
+                        f"({coolest_temp:.1f}°C) and cover {coolest_area:.1f}% of the area, "
+                        f"demonstrating effective natural cooling potential."
+                    )
+                
+                # Vegetation coverage insight
+                veg_types = ['Tree Cover', 'Shrubland', 'Grassland', 'Cropland']
+                veg_coverage = lulc_stats[lulc_stats.index.isin(veg_types)]['Area Coverage (%)'].sum() if any(vt in lulc_stats.index for vt in veg_types) else 0
+                
+                if veg_coverage > 0:
+                    insights.append(
+                        f"🌳 **Vegetation Coverage**: Combined vegetation (trees, shrubs, grassland, cropland) "
+                        f"covers {veg_coverage:.1f}% of the study area. "
+                        f"{'This is good coverage for urban cooling.' if veg_coverage > 30 else 'Increasing this coverage could improve urban cooling.'}"
                     )
                 
                 for insight in insights:
