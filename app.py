@@ -774,6 +774,76 @@ except Exception as e:
     st.warning(f"Could not load district boundaries: {str(e)}")
     pass
 
+# Add LULC Legend to lower right corner
+lulc_legend_html = """
+<div style="position: fixed; 
+            bottom: 50px; 
+            right: 10px; 
+            width: 220px; 
+            background-color: white; 
+            border: 2px solid grey; 
+            border-radius: 5px; 
+            z-index: 9999; 
+            font-size: 12px;
+            padding: 10px;
+            box-shadow: 2px 2px 6px rgba(0,0,0,0.3);">
+    <div style="text-align: center; font-weight: bold; font-size: 14px; margin-bottom: 8px; border-bottom: 1px solid #ccc; padding-bottom: 5px;">
+        🌍 Land Cover Legend
+    </div>
+    <div style="max-height: 300px; overflow-y: auto;">
+        <div style="margin: 3px 0; display: flex; align-items: center;">
+            <span style="background-color: #006400; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
+            <span>Tree Cover</span>
+        </div>
+        <div style="margin: 3px 0; display: flex; align-items: center;">
+            <span style="background-color: #FFBB22; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
+            <span>Shrubland</span>
+        </div>
+        <div style="margin: 3px 0; display: flex; align-items: center;">
+            <span style="background-color: #FFFF4C; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
+            <span>Grassland</span>
+        </div>
+        <div style="margin: 3px 0; display: flex; align-items: center;">
+            <span style="background-color: #F096FF; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
+            <span>Cropland</span>
+        </div>
+        <div style="margin: 3px 0; display: flex; align-items: center;">
+            <span style="background-color: #FA0000; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
+            <span><b>Built-up (Urban)</b></span>
+        </div>
+        <div style="margin: 3px 0; display: flex; align-items: center;">
+            <span style="background-color: #B4B4B4; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
+            <span>Bare/Sparse Veg</span>
+        </div>
+        <div style="margin: 3px 0; display: flex; align-items: center;">
+            <span style="background-color: #F0F0F0; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
+            <span>Snow/Ice</span>
+        </div>
+        <div style="margin: 3px 0; display: flex; align-items: center;">
+            <span style="background-color: #0064C8; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
+            <span>Water Bodies</span>
+        </div>
+        <div style="margin: 3px 0; display: flex; align-items: center;">
+            <span style="background-color: #0096A0; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
+            <span>Wetland</span>
+        </div>
+        <div style="margin: 3px 0; display: flex; align-items: center;">
+            <span style="background-color: #00CF75; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
+            <span>Mangroves</span>
+        </div>
+        <div style="margin: 3px 0; display: flex; align-items: center;">
+            <span style="background-color: #FAE6A0; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
+            <span>Moss/Lichen</span>
+        </div>
+    </div>
+    <div style="margin-top: 8px; padding-top: 5px; border-top: 1px solid #ccc; font-size: 10px; color: #666; text-align: center;">
+        ESA WorldCover 2021 (10m)
+    </div>
+</div>
+"""
+
+m.get_root().html.add_child(folium.Element(lulc_legend_html))
+
 # Add layer control to the map
 folium.LayerControl(position='topright', collapsed=False).add_to(m)
 
