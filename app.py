@@ -353,20 +353,6 @@ def add_ee_layer(self, ee_image_object, vis_params, name, opacity=1.0):
 folium.Map.add_ee_layer = add_ee_layer
 
 # Add MODIS LST layer with enhanced styling
-vis_params = {
-    "min": -5,
-    "max": 50,
-    "palette": [
-        "#0000ff",  # Deep Blue - Coldest
-        "#00ccff",  # Cyan - Very Cool
-        "#00ff00",  # Green - Cool
-        "#ffff00",  # Yellow - Warm
-        "#ff8800",  # Orange - Hot
-        "#ff0000",  # Red - Very Hot
-        "#8b0000",  # Dark Red - Hottest
-    ],
-}
-
 try:
     # Fetch MODIS LST
     lst = (
@@ -379,12 +365,55 @@ try:
     # Convert LST to Celsius
     lst_celsius = lst.multiply(0.02).subtract(273.15)
     
-    # Clip to district boundaries if available
+    # Calculate dynamic min/max values from the actual data for better visualization
     if districts_geometry:
         lst_clipped = lst_celsius.clip(districts_geometry)
-        m.add_ee_layer(lst_clipped, vis_params, "🌡️ Land Surface Temperature (°C)", opacity=0.6)
+        display_layer = lst_clipped
     else:
-        m.add_ee_layer(lst_celsius, vis_params, "🌡️ Land Surface Temperature (°C)", opacity=0.6)
+        display_layer = lst_celsius
+    
+    # Get statistics from the actual data
+    try:
+        stats = display_layer.reduceRegion(
+            reducer=ee.Reducer.minMax(),
+            geometry=districts_geometry if districts_geometry else region,
+            scale=1000,
+            maxPixels=1e9
+        ).getInfo()
+        
+        # Extract min/max values with fallback
+        data_min = stats.get('LST_Day_1km_min', 10)
+        data_max = stats.get('LST_Day_1km_max', 40)
+        
+        # Add some buffer to the range for better color distribution
+        buffer = (data_max - data_min) * 0.1
+        viz_min = max(data_min - buffer, -5)
+        viz_max = min(data_max + buffer, 55)
+        
+        st.info(f"📊 LST Range: {data_min:.1f}°C to {data_max:.1f}°C (Visualization: {viz_min:.1f}°C to {viz_max:.1f}°C)")
+    except:
+        # Fallback to seasonal defaults if calculation fails
+        viz_min = 10
+        viz_max = 40
+        st.warning("Using default temperature range (10-40°C)")
+    
+    # Set visualization parameters with dynamic range
+    vis_params = {
+        "min": viz_min,
+        "max": viz_max,
+        "palette": [
+            "#0000ff",  # Deep Blue - Coldest
+            "#00ccff",  # Cyan - Very Cool
+            "#00ff00",  # Green - Cool
+            "#ffff00",  # Yellow - Warm
+            "#ff8800",  # Orange - Hot
+            "#ff0000",  # Red - Very Hot
+            "#8b0000",  # Dark Red - Hottest
+        ],
+    }
+    
+    # Add the layer to the map
+    m.add_ee_layer(display_layer, vis_params, "🌡️ Land Surface Temperature (°C)", opacity=0.6)
     
     # Add NDVI-LST Correlation Layer
     try:
