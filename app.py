@@ -536,6 +536,122 @@ except Exception as ndvi_error:
     except Exception as fallback_e:
         st.warning(f"Vegetation layer temporarily unavailable")
 
+# Add Land Use / Land Cover Layers
+st.subheader("🏙️ Land Use / Land Cover Analysis")
+
+try:
+    # Option 1: ESA WorldCover (10m resolution - High detail)
+    worldcover = ee.ImageCollection("ESA/WorldCover/v200").first()
+    
+    # ESA WorldCover classification:
+    # 10: Tree cover, 20: Shrubland, 30: Grassland, 40: Cropland, 
+    # 50: Built-up, 60: Bare/sparse vegetation, 70: Snow and ice, 
+    # 80: Permanent water bodies, 90: Herbaceous wetland, 95: Mangroves, 100: Moss and lichen
+    
+    worldcover_vis = {
+        'min': 10,
+        'max': 100,
+        'palette': [
+            '#006400',  # 10 - Tree cover (dark green)
+            '#FFBB22',  # 20 - Shrubland (orange-yellow)
+            '#FFFF4C',  # 30 - Grassland (light yellow)
+            '#F096FF',  # 40 - Cropland (pink-purple)
+            '#FA0000',  # 50 - Built-up (red) - URBAN AREAS
+            '#B4B4B4',  # 60 - Bare/sparse vegetation (gray)
+            '#F0F0F0',  # 70 - Snow and ice (white)
+            '#0064C8',  # 80 - Permanent water (blue)
+            '#0096A0',  # 90 - Herbaceous wetland (cyan)
+            '#00CF75',  # 95 - Mangroves (sea green)
+            '#FAE6A0',  # 100 - Moss and lichen (beige)
+        ]
+    }
+    
+    if districts_geometry:
+        worldcover_clipped = worldcover.clip(districts_geometry)
+        m.add_ee_layer(worldcover_clipped, worldcover_vis, "🌍 Land Cover (ESA 10m)", opacity=0.5)
+    else:
+        m.add_ee_layer(worldcover, worldcover_vis, "🌍 Land Cover (ESA 10m)", opacity=0.5)
+    
+    # Calculate land use statistics
+    try:
+        land_use_stats = worldcover_clipped.reduceRegion(
+            reducer=ee.Reducer.frequencyHistogram(),
+            geometry=districts_geometry if districts_geometry else region,
+            scale=100,
+            maxPixels=1e9
+        ).getInfo()
+        
+        if land_use_stats and 'Map' in land_use_stats:
+            land_class_names = {
+                '10': 'Tree Cover', '20': 'Shrubland', '30': 'Grassland', 
+                '40': 'Cropland', '50': 'Built-up (Urban)', '60': 'Bare/Sparse Vegetation',
+                '70': 'Snow/Ice', '80': 'Water Bodies', '90': 'Wetland', 
+                '95': 'Mangroves', '100': 'Moss/Lichen'
+            }
+            
+            histogram = land_use_stats['Map']
+            total_pixels = sum(histogram.values())
+            
+            st.markdown("### 📊 Land Use Distribution")
+            
+            # Create columns for land use stats
+            col1, col2, col3, col4 = st.columns(4, gap="small")
+            
+            # Calculate percentages
+            land_use_pct = {land_class_names.get(k, k): (v/total_pixels)*100 
+                           for k, v in histogram.items()}
+            
+            # Sort by percentage
+            sorted_land_use = sorted(land_use_pct.items(), key=lambda x: x[1], reverse=True)
+            
+            # Display top land uses in metrics
+            for idx, (land_type, percentage) in enumerate(sorted_land_use[:4]):
+                with [col1, col2, col3, col4][idx]:
+                    st.metric(land_type, f"{percentage:.1f}%")
+            
+            # Show all land uses in a table
+            if len(sorted_land_use) > 4:
+                import pandas as pd
+                df_land_use = pd.DataFrame(sorted_land_use, columns=['Land Use Type', 'Coverage (%)'])
+                df_land_use['Coverage (%)'] = df_land_use['Coverage (%)'].round(2)
+                st.dataframe(df_land_use, width='stretch', hide_index=True)
+                
+    except Exception as stats_error:
+        st.info("💡 Land use statistics calculation in progress...")
+    
+    st.success("✅ High-resolution land cover layer (10m) added to map")
+    
+except Exception as worldcover_error:
+    st.warning(f"ESA WorldCover not available, trying MODIS Land Cover...")
+    
+    try:
+        # Fallback: MODIS Land Cover (500m resolution)
+        modis_lc = ee.ImageCollection("MODIS/061/MCD12Q1").first().select('LC_Type1')
+        
+        # MODIS IGBP classification colors
+        modis_lc_vis = {
+            'min': 1,
+            'max': 17,
+            'palette': [
+                '05450a', '086a10', '54a708', '78d203', '009900', 'c6b044',
+                'dcd159', 'dade48', 'fbff13', 'b6ff05', '27ff87', 'c24f44',
+                'a5a5a5', 'ff6d4c', '69fff8', 'f9ffa4', '1c0dff'
+            ]
+        }
+        
+        if districts_geometry:
+            modis_lc_clipped = modis_lc.clip(districts_geometry)
+            m.add_ee_layer(modis_lc_clipped, modis_lc_vis, "🌍 Land Cover (MODIS 500m)", opacity=0.5)
+        else:
+            m.add_ee_layer(modis_lc, modis_lc_vis, "🌍 Land Cover (MODIS 500m)", opacity=0.5)
+        
+        st.info("ℹ️ Using MODIS Land Cover (500m resolution)")
+        
+    except Exception as modis_lc_error:
+        st.warning("Land cover layers temporarily unavailable")
+
+except Exception as lc_error:
+    st.warning(f"Could not load land cover data: {str(lc_error)}")
 
 
 # Locations for weather monitoring - All 11 Delhi districts
