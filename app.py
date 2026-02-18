@@ -1223,18 +1223,18 @@ col_date1, col_date2 = st.columns([1, 1], gap="medium")
 with col_date1:
     corr_start_date = st.date_input(
         "Analysis Start Date",
-        value=datetime.date(2025, 12, 31),
-        min_value=datetime.date(2000, 1, 1),
-        max_value=datetime.date.today(),
+        value=datetime(2025, 12, 31).date(),
+        min_value=datetime(2000, 1, 1).date(),
+        max_value=datetime.now().date(),
         help="Select start date for correlation analysis (MODIS data available from 2000)"
     )
 
 with col_date2:
     corr_end_date = st.date_input(
         "Analysis End Date",
-        value=datetime.date(2026, 1, 30),
-        min_value=datetime.date(2000, 1, 1),
-        max_value=datetime.date.today(),
+        value=datetime(2026, 1, 30).date(),
+        min_value=datetime(2000, 1, 1).date(),
+        max_value=datetime.now().date(),
         help="Select end date for correlation analysis"
     )
 
