@@ -246,7 +246,7 @@ def get_districts_ee_geometry():
             return ee.Geometry.Rectangle([76.8388, 28.4044, 77.3465, 28.8833])
         
         # Merge all district geometries and fix any invalid geometries
-        merged_geom = delhi_gdf.unary_union
+        merged_geom = delhi_gdf.union_all()
         
         # Validate and fix geometry if needed
         if not merged_geom.is_valid:
@@ -661,7 +661,7 @@ try:
             template='plotly_white'
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
         # Display statistics
         col1, col2, col3, col4 = st.columns(4)
@@ -727,7 +727,7 @@ try:
             showlegend=False
         )
         
-        st.plotly_chart(fig_bar, use_container_width=True)
+        st.plotly_chart(fig_bar, width='stretch')
     
     # Scatter plot - showing temperature vs feels like
     with col2:
@@ -756,7 +756,7 @@ try:
             template='plotly_white'
         )
         
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        st.plotly_chart(fig_scatter, width='stretch')
     
     # Spatial statistics
     st.subheader("Spatial Temperature Statistics")
@@ -789,7 +789,7 @@ try:
     df_display['Humidity'] = df_display['Humidity'].round(0).astype(int)
     df_display['Temp Anomaly'] = df_display['Temp Anomaly'].round(2)
     
-    st.dataframe(df_display, use_container_width=True)
+    st.dataframe(df_display, width='stretch')
     
     # Heat gradient map visualization
     st.subheader("Heat Distribution Map")
@@ -864,7 +864,7 @@ Anomaly: {row['Temperature'] - df_spatial['Temperature'].mean():+.2f}°C
     
     fig_uhi.add_hline(y=0, line_dash="dash", line_color="gray")
     
-    st.plotly_chart(fig_uhi, use_container_width=True)
+    st.plotly_chart(fig_uhi, width='stretch')
     
     # UHI Summary
     hottest_district = df_uhi.loc[df_uhi['UHI Intensity'].idxmax()]
@@ -957,7 +957,7 @@ try:
             showlegend=False
         )
         
-        st.plotly_chart(fig_ndvi, use_container_width=True)
+        st.plotly_chart(fig_ndvi, width='stretch')
     
     # Correlation scatter plot - NDVI vs Temperature
     with col2:
@@ -986,7 +986,7 @@ try:
             template='plotly_white'
         )
         
-        st.plotly_chart(fig_corr, use_container_width=True)
+        st.plotly_chart(fig_corr, width='stretch')
     
     # Calculate correlation
     correlation = df_greenery['NDVI'].corr(df_greenery['Temperature'])
@@ -1020,7 +1020,7 @@ try:
     df_analysis['Temp from Mean'] = (df_analysis['Temperature'] - df_analysis['Temperature'].mean()).round(2)
     df_analysis = df_analysis.sort_values('NDVI', ascending=False)
     
-    st.dataframe(df_analysis, use_container_width=True)
+    st.dataframe(df_analysis, width='stretch')
     
     # Key Insights
     st.subheader("Key Insights")
