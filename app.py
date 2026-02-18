@@ -1216,6 +1216,35 @@ Analyze the relationships between vegetation (NDVI), land surface temperature (L
 and land use/land cover (LULC) to understand urban heat dynamics.
 """)
 
+# Date range selection for correlation analysis
+st.subheader("📅 Select Date Range for Analysis")
+col_date1, col_date2 = st.columns([1, 1], gap="medium")
+
+with col_date1:
+    corr_start_date = st.date_input(
+        "Analysis Start Date",
+        value=datetime.date(2025, 12, 31),
+        min_value=datetime.date(2000, 1, 1),
+        max_value=datetime.date.today(),
+        help="Select start date for correlation analysis (MODIS data available from 2000)"
+    )
+
+with col_date2:
+    corr_end_date = st.date_input(
+        "Analysis End Date",
+        value=datetime.date(2026, 1, 30),
+        min_value=datetime.date(2000, 1, 1),
+        max_value=datetime.date.today(),
+        help="Select end date for correlation analysis"
+    )
+
+# Validate date range
+if corr_start_date >= corr_end_date:
+    st.error("⚠️ Start date must be before end date!")
+    st.stop()
+
+st.info(f"📊 Analyzing data from **{corr_start_date}** to **{corr_end_date}** ({(corr_end_date - corr_start_date).days} days)")
+
 try:
     # Sample data from Delhi districts using Earth Engine
     import pandas as pd
@@ -1227,19 +1256,19 @@ try:
     else:
         sampling_geometry = region
     
-    # Get LST data
+    # Get LST data using selected date range
     lst_image = (
         ee.ImageCollection("MODIS/061/MOD11A1")
-        .filterDate(modis_start_date.isoformat(), modis_end_date.isoformat())
+        .filterDate(corr_start_date.isoformat(), corr_end_date.isoformat())
         .select("LST_Day_1km")
         .mean()
     )
     lst_celsius_sample = lst_image.multiply(0.02).subtract(273.15)
     
-    # Get NDVI data
+    # Get NDVI data using selected date range
     ndvi_image = (
         ee.ImageCollection("MODIS/061/MOD13A2")
-        .filterDate(modis_start_date.isoformat(), modis_end_date.isoformat())
+        .filterDate(corr_start_date.isoformat(), corr_end_date.isoformat())
         .select("NDVI")
         .mean()
     ).divide(10000)
