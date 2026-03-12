@@ -1200,13 +1200,18 @@ try:
         region
     ).select("LST")
     day_span = max((end_date - start_date).days, 1)
+    scene_count_estimate = lst_scene_collection.size().getInfo()
 
-    # Use temporal compositing for long ranges to avoid Earth Engine
-    # "Too many concurrent aggregations" errors.
-    if day_span <= 365:
+    # Use temporal compositing aggressively when there are many images to avoid
+    # Earth Engine aggregation/concurrency limits.
+    if day_span <= 120 and scene_count_estimate <= 40:
         ts_collection = lst_scene_collection
     else:
-        interval_months = 1 if day_span <= 3 * 365 else 3
+        if day_span > 3 * 365 or scene_count_estimate > 120:
+            interval_months = 3
+        else:
+            interval_months = 1
+
         start_ee = ee.Date(start_date.isoformat())
         end_ee = ee.Date(end_date.isoformat()).advance(1, 'day')
         total_months = ee.Number(end_ee.difference(start_ee, 'month')).ceil()
@@ -1245,61 +1250,52 @@ try:
         "100": "Moss/Lichen",
     }
     
-    # Extract time series data for the region
-    def extract_lst_stats(image):
-        date = ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')
-        lst_celsius = image
-        
-        # Calculate mean LST for the region
-        mean_lst = lst_celsius.reduceRegion(
-            reducer=ee.Reducer.mean(),
-            geometry=region,
-            scale=100,
-            maxPixels=1e9
-        ).get('LST')
+    # Build time-series sequentially to avoid Earth Engine concurrent aggregation limits.
+    ts_count = ts_collection.size().getInfo()
+    ts_images = ts_collection.toList(ts_count)
 
-        grouped_stats = lst_celsius.addBands(worldcover_ts).reduceRegion(
-            reducer=ee.Reducer.mean().group(groupField=1, groupName='landcover'),
-            geometry=region,
-            scale=100,
-            maxPixels=1e9
-        ).get('groups')
-        
-        return ee.Feature(None, {
-            'date': date,
-            'mean_lst': mean_lst,
-            'landcover_groups': grouped_stats
-        })
-    
-    # Map the function over the collection
-    ts_data = ts_collection.map(extract_lst_stats)
-    
-    # Get the data
-    ts_list = ts_data.toList(ts_data.size()).getInfo()
-    
-    # Create DataFrame
+    # Create DataFrame inputs
     dates = []
     temps = []
     lulc_ts_rows = []
-    
-    for feature in ts_list:
-        if feature and 'properties' in feature:
-            props = feature['properties']
-            if props.get('mean_lst') is not None:
-                dates.append(props['date'])
-                temps.append(float(props['mean_lst']))
 
-            for group_item in props.get('landcover_groups', []) or []:
-                lc_code_raw = group_item.get('landcover')
-                lc_mean = group_item.get('mean')
-                if lc_code_raw is None or lc_mean is None:
-                    continue
-                lc_code = str(int(lc_code_raw))
-                lulc_ts_rows.append({
-                    'Date': pd.to_datetime(props['date']),
-                    'Land Cover': land_cover_name_map.get(lc_code, f'Class {lc_code}'),
-                    'Mean LST (°C)': float(lc_mean),
-                })
+    for idx in range(ts_count):
+        img = ee.Image(ts_images.get(idx))
+        date_str = ee.Date(img.get('system:time_start')).format('YYYY-MM-dd').getInfo()
+
+        mean_lst = img.reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=region,
+            scale=100,
+            maxPixels=1e9,
+            bestEffort=True,
+            tileScale=4
+        ).get('LST').getInfo()
+
+        if mean_lst is not None:
+            dates.append(date_str)
+            temps.append(float(mean_lst))
+
+        grouped_stats = img.addBands(worldcover_ts).reduceRegion(
+            reducer=ee.Reducer.mean().group(groupField=1, groupName='landcover'),
+            geometry=region,
+            scale=250,
+            maxPixels=1e9,
+            bestEffort=True,
+            tileScale=4
+        ).get('groups').getInfo()
+
+        for group_item in grouped_stats or []:
+            lc_code_raw = group_item.get('landcover')
+            lc_mean = group_item.get('mean')
+            if lc_code_raw is None or lc_mean is None:
+                continue
+            lc_code = str(int(lc_code_raw))
+            lulc_ts_rows.append({
+                'Date': pd.to_datetime(date_str),
+                'Land Cover': land_cover_name_map.get(lc_code, f'Class {lc_code}'),
+                'Mean LST (°C)': float(lc_mean),
+            })
     
     if dates:
         df_ts = pd.DataFrame({
@@ -1806,12 +1802,18 @@ with col_date2:
         help="Select end date for correlation analysis"
     )
 
+run_corr_analysis = st.button("Run Correlation Analysis", type="primary")
+
 # Validate date range
 if corr_start_date >= corr_end_date:
     st.error("⚠️ Start date must be before end date!")
     st.stop()
 
 try:
+    if not run_corr_analysis:
+        st.caption("Click 'Run Correlation Analysis' to compute correlation statistics and charts.")
+        raise StopIteration
+
     # Sample data from Delhi districts using Earth Engine
     import pandas as pd
     import numpy as np
@@ -1838,373 +1840,145 @@ try:
     combined_image = lst_celsius_sample.addBands(ndvi_image).addBands(lulc_image)
     combined_image = combined_image.select(['LST', 'NDVI', 'Map'], ['LST', 'NDVI', 'LandCover'])
     
-    # Sample random points
     sample_points = combined_image.sample(
         region=sampling_geometry,
-        scale=100,  # 100m resolution
-        numPixels=500,  # Sample 500 points
+        scale=250,
+        numPixels=300,
         seed=42,
-        geometries=True
+        geometries=False,
+        tileScale=4
     )
 
-    # Get the data
     sample_data = sample_points.getInfo()
 
-    if sample_data and 'features' in sample_data and len(sample_data['features']) > 0:
-        # Extract data into DataFrame
-        data_list = []
-        for feature in sample_data['features']:
-            props = feature['properties']
-            if 'LST' in props and 'NDVI' in props and 'LandCover' in props:
-                data_list.append({
-                    'LST': props['LST'],
-                    'NDVI': props['NDVI'],
-                    'LandCover': props['LandCover']
-                })
-            
-            df_corr = pd.DataFrame(data_list)
-            
-            # Filter out invalid values
-            df_corr = df_corr[(df_corr['LST'] > -50) & (df_corr['LST'] < 60)]  # Reasonable temperature range
-            df_corr = df_corr[(df_corr['NDVI'] >= -1) & (df_corr['NDVI'] <= 1)]  # Valid NDVI range
-            
-            # Map land cover codes to names
-            lulc_names = {
-                10: 'Tree Cover', 20: 'Shrubland', 30: 'Grassland', 40: 'Cropland',
-                50: 'Built-up', 60: 'Bare/Sparse', 70: 'Snow/Ice', 80: 'Water',
-                90: 'Wetland', 95: 'Mangroves', 100: 'Moss/Lichen'
-            }
-            df_corr['LandCover_Name'] = df_corr['LandCover'].map(lulc_names).fillna('Other')
-            
-            if len(df_corr) > 10:  # Need sufficient data points
-                # Calculate correlations
-                corr_ndvi_lst = df_corr['NDVI'].corr(df_corr['LST'])
-                
-                # Display key metrics
-                st.subheader("Correlation Statistics")
-                col1, col2, col3, col4 = st.columns(4, gap="small")
-                
-                with col1:
-                    st.metric(
-                        "NDVI-LST Correlation",
-                        f"{corr_ndvi_lst:.3f}",
-                        "Negative = vegetation cools"
-                    )
-                
-                with col2:
-                    urban_temp = df_corr[df_corr['LandCover'] == 50]['LST'].mean() if 50 in df_corr['LandCover'].values else 0
-                    st.metric(
-                        "Avg Urban Temperature",
-                        f"{urban_temp:.1f}°C" if urban_temp > 0 else "N/A",
-                        "Built-up areas"
-                    )
-                
-                with col3:
-                    veg_temp = df_corr[df_corr['LandCover'].isin([10, 20, 30])]['LST'].mean() if any(lc in df_corr['LandCover'].values for lc in [10, 20, 30]) else 0
-                    st.metric(
-                        "Avg Vegetation Temperature",
-                        f"{veg_temp:.1f}°C" if veg_temp > 0 else "N/A",
-                        "Green areas"
-                    )
-                
-                with col4:
-                    if urban_temp > 0 and veg_temp > 0:
-                        temp_diff = urban_temp - veg_temp
-                        st.metric(
-                            "Urban Heat Island Effect",
-                            f"{temp_diff:.1f}°C",
-                            "Urban vs Vegetation"
-                        )
-                    else:
-                        st.metric("Urban Heat Island Effect", "N/A", "Insufficient data")
-                
-                # Visualizations
-                st.subheader("Correlation Visualizations")
-                
-                # First row: Area coverage visualizations
-                col1, col2 = st.columns([1, 1], gap="medium")
-                
-                # Land cover area distribution (pie chart)
-                with col1:
-                    # Calculate area coverage (number of pixels as proxy for area)
-                    lulc_area = df_corr['LandCover_Name'].value_counts()
-                    total_samples = len(df_corr)
-                    lulc_area_pct = (lulc_area / total_samples * 100).round(2)
-                    
-                    # Color mapping for land cover
-                    lulc_colors = {
-                        'Tree Cover': '#006400',
-                        'Shrubland': '#FFBB22',
-                        'Grassland': '#FFFF4C',
-                        'Cropland': '#F096FF',
-                        'Built-up': '#FA0000',
-                        'Bare/Sparse': '#B4B4B4',
-                        'Snow/Ice': '#F0F0F0',
-                        'Water': '#0064C8',
-                        'Wetland': '#0096A0',
-                        'Mangroves': '#00CF75',
-                        'Moss/Lichen': '#FAE6A0'
-                    }
-                    
-                    colors_list = [lulc_colors.get(name, '#999999') for name in lulc_area.index]
-                    
-                    fig_pie = go.Figure(data=[go.Pie(
-                        labels=lulc_area.index,
-                        values=lulc_area.values,
-                        marker=dict(colors=colors_list),
-                        textposition='inside',
-                        textinfo='label+percent',
-                        hovertemplate='<b>%{label}</b><br>Coverage: %{percent}<br>Samples: %{value}<extra></extra>'
-                    )])
-                    
-                    fig_pie.update_layout(
-                        title='Land Use/Land Cover Distribution',
-                        height=450,
-                        template='plotly_white',
-                        showlegend=True
-                    )
-                    
-                    st.plotly_chart(fig_pie, width='stretch')
-                
-                # Area-weighted temperature by land cover
-                with col2:
-                    # Create bar chart with area coverage and temperature
-                    lulc_summary = df_corr.groupby('LandCover_Name').agg({
-                        'LST': 'mean',
-                        'LandCover': 'count'
-                    }).rename(columns={'LandCover': 'Area_Count'})
-                    
-                    lulc_summary['Area_Percent'] = (lulc_summary['Area_Count'] / len(df_corr) * 100).round(2)
-                    lulc_summary = lulc_summary.sort_values('Area_Percent', ascending=True)
-                    
-                    fig_area_temp = go.Figure()
-                    
-                    # Bar for area coverage
-                    fig_area_temp.add_trace(go.Bar(
-                        y=lulc_summary.index,
-                        x=lulc_summary['Area_Percent'],
-                        name='Area Coverage (%)',
-                        orientation='h',
-                        marker=dict(
-                            color=lulc_summary['LST'],
-                            colorscale='RdYlBu_r',
-                            showscale=True,
-                            colorbar=dict(title="Temp (°C)", x=1.15)
-                        ),
-                        text=lulc_summary['Area_Percent'].apply(lambda x: f'{x:.1f}%'),
-                        textposition='auto',
-                        hovertemplate='<b>%{y}</b><br>Coverage: %{x:.1f}%<br>Avg Temp: %{marker.color:.1f}°C<extra></extra>'
-                    ))
-                    
-                    fig_area_temp.update_layout(
-                        title='Land Cover Area Coverage (colored by temperature)',
-                        xaxis_title='Area Coverage (%)',
-                        yaxis_title='Land Use Type',
-                        height=450,
-                        template='plotly_white',
-                        showlegend=False
-                    )
-                    
-                    st.plotly_chart(fig_area_temp, width='stretch')
-                
-                # Second row: Correlation visualizations
-                col1, col2 = st.columns([1, 1], gap="medium")
-                
-                # NDVI vs LST scatter plot
-                with col1:
-                    fig_scatter = go.Figure()
-                    
-                    # Color by land cover
-                    for lc_code, lc_name in lulc_names.items():
-                        df_lc = df_corr[df_corr['LandCover'] == lc_code]
-                        if len(df_lc) > 0:
-                            # Calculate size based on area coverage
-                            area_pct = (len(df_lc) / len(df_corr)) * 100
-                            marker_size = max(6, min(15, area_pct * 2))  # Scale size by coverage
-                            
-                            fig_scatter.add_trace(go.Scatter(
-                                x=df_lc['NDVI'],
-                                y=df_lc['LST'],
-                                mode='markers',
-                                name=f'{lc_name} ({area_pct:.1f}%)',
-                                marker=dict(size=marker_size, opacity=0.6)
-                            ))
-                    
-                    # Add trend line
-                    z = np.polyfit(df_corr['NDVI'], df_corr['LST'], 1)
-                    p = np.poly1d(z)
-                    x_trend = np.linspace(df_corr['NDVI'].min(), df_corr['NDVI'].max(), 100)
-                    
-                    fig_scatter.add_trace(go.Scatter(
-                        x=x_trend,
-                        y=p(x_trend),
-                        mode='lines',
-                        name='Trend Line',
-                        line=dict(color='black', width=2, dash='dash')
-                    ))
-                    
-                    fig_scatter.update_layout(
-                        title=f'NDVI vs LST (Correlation: {corr_ndvi_lst:.3f})',
-                        xaxis_title='Vegetation Index (NDVI)',
-                        yaxis_title='Land Surface Temperature (°C)',
-                        height=450,
-                        template='plotly_white',
-                        showlegend=True
-                    )
-                    
-                    st.plotly_chart(fig_scatter, width='stretch')
-                
-                # Temperature by Land Cover boxplot
-                with col2:
-                    fig_box = go.Figure()
-                    
-                    for lc_code, lc_name in lulc_names.items():
-                        df_lc = df_corr[df_corr['LandCover'] == lc_code]
-                        if len(df_lc) > 0:
-                            fig_box.add_trace(go.Box(
-                                y=df_lc['LST'],
-                                name=lc_name,
-                                boxmean='sd'
-                            ))
-                    
-                    fig_box.update_layout(
-                        title='Temperature Distribution by Land Use Type',
-                        yaxis_title='Land Surface Temperature (°C)',
-                        height=450,
-                        template='plotly_white',
-                        showlegend=False
-                    )
-                    
-                    st.plotly_chart(fig_box, width='stretch')
-                
-                # Land cover statistics table
-                st.subheader("Temperature & Area Statistics by Land Use Type")
-                
-                # Calculate comprehensive statistics including area coverage
-                lulc_stats = df_corr.groupby('LandCover_Name').agg({
-                    'LST': ['count', 'mean', 'std', 'min', 'max'],
-                    'NDVI': 'mean'
-                }).round(2)
-                
-                # Flatten column names
-                lulc_stats.columns = ['Sample Count', 'Mean Temp (°C)', 'Std Dev', 'Min Temp (°C)', 'Max Temp (°C)', 'Avg NDVI']
-                
-                # Add area coverage percentage
-                lulc_stats['Area Coverage (%)'] = (lulc_stats['Sample Count'] / len(df_corr) * 100).round(2)
-                
-                # Reorder columns
-                lulc_stats = lulc_stats[['Sample Count', 'Area Coverage (%)', 'Mean Temp (°C)', 'Avg NDVI', 'Std Dev', 'Min Temp (°C)', 'Max Temp (°C)']]
-                
-                # Sort by area coverage (descending)
-                lulc_stats = lulc_stats.sort_values('Area Coverage (%)', ascending=False)
-                
-                # Style the dataframe
-                st.dataframe(
-                    lulc_stats.style.background_gradient(subset=['Mean Temp (°C)'], cmap='RdYlBu_r')
-                                   .background_gradient(subset=['Area Coverage (%)'], cmap='Greens'),
-                    width='stretch'
-                )
-                
-                # Key Insights
-                st.subheader("🔍 Key Insights")
-                
-                insights = []
-                
-                # Area coverage insights
-                if len(lulc_stats) > 0:
-                    # Get dominant land cover by area
-                    dominant_lc = lulc_stats.index[0]
-                    dominant_pct = lulc_stats.iloc[0]['Area Coverage (%)']
-                    dominant_temp = lulc_stats.iloc[0]['Mean Temp (°C)']
-                    
-                    insights.append(
-                        f"🏆 **Dominant Land Cover**: {dominant_lc} covers the largest area ({dominant_pct:.1f}%) "
-                        f"with an average temperature of {dominant_temp:.1f}°C. This land use type has the "
-                        f"greatest influence on overall urban heat patterns."
-                    )
-                
-                # NDVI-LST correlation insight
-                if corr_ndvi_lst < -0.3:
-                    insights.append(
-                        "✅ **Strong Cooling Effect of Vegetation**: Strong negative correlation between NDVI and LST "
-                        f"({corr_ndvi_lst:.3f}) confirms that vegetation significantly reduces surface temperatures."
-                    )
-                elif corr_ndvi_lst < -0.1:
-                    insights.append(
-                        "⚠️ **Moderate Cooling Effect**: Moderate negative correlation "
-                        f"({corr_ndvi_lst:.3f}) shows vegetation provides some cooling, but other factors also matter."
-                    )
-                
-                # Urban heat island insight with area context
-                if urban_temp > 0 and veg_temp > 0 and (urban_temp - veg_temp) > 2:
-                    # Calculate built-up area percentage
-                    built_up_pct = lulc_stats.loc['Built-up', 'Area Coverage (%)'] if 'Built-up' in lulc_stats.index else 0
-                    
-                    insights.append(
-                        f"🔥 **Significant Urban Heat Island**: Built-up areas (covering {built_up_pct:.1f}% of the region) "
-                        f"are {(urban_temp - veg_temp):.1f}°C hotter than vegetated areas on average, highlighting the "
-                        f"need for urban greening strategies."
-                    )
-                
-                # Temperature extreme by area-weighted impact
-                if len(lulc_stats) > 0:
-                    # Sort by mean temp to find hottest
-                    lulc_by_temp = lulc_stats.sort_values('Mean Temp (°C)', ascending=False)
-                    hottest_lc = lulc_by_temp.index[0]
-                    hottest_temp = lulc_by_temp.iloc[0]['Mean Temp (°C)']
-                    hottest_area = lulc_by_temp.iloc[0]['Area Coverage (%)']
-                    
-                    insights.append(
-                        f"🌡️ **Hottest Land Cover**: {hottest_lc} areas show the highest average temperature "
-                        f"({hottest_temp:.1f}°C) and cover {hottest_area:.1f}% of the study area, "
-                        f"indicating priority zones for cooling interventions."
-                    )
-                
-                # Coolest land cover with area context
-                if len(lulc_stats) > 1:
-                    lulc_by_temp = lulc_stats.sort_values('Mean Temp (°C)', ascending=False)
-                    coolest_lc = lulc_by_temp.index[-1]
-                    coolest_temp = lulc_by_temp.iloc[-1]['Mean Temp (°C)']
-                    coolest_area = lulc_by_temp.iloc[-1]['Area Coverage (%)']
-                    
-                    insights.append(
-                        f"❄️ **Coolest Land Cover**: {coolest_lc} areas maintain the lowest temperatures "
-                        f"({coolest_temp:.1f}°C) and cover {coolest_area:.1f}% of the area, "
-                        f"demonstrating effective natural cooling potential."
-                    )
-                
-                # Vegetation coverage insight
-                veg_types = ['Tree Cover', 'Shrubland', 'Grassland', 'Cropland']
-                veg_coverage = lulc_stats[lulc_stats.index.isin(veg_types)]['Area Coverage (%)'].sum() if any(vt in lulc_stats.index for vt in veg_types) else 0
-                
-                if veg_coverage > 0:
-                    insights.append(
-                        f"🌳 **Vegetation Coverage**: Combined vegetation (trees, shrubs, grassland, cropland) "
-                        f"covers {veg_coverage:.1f}% of the study area. "
-                        f"{'This is good coverage for urban cooling.' if veg_coverage > 30 else 'Increasing this coverage could improve urban cooling.'}"
-                    )
-                
-                for insight in insights:
-                    st.info(insight)
-                
-                # Recommendations
-                st.subheader("💡 Recommendations")
-                
-                recommendations = [
-                    "🌳 **Increase Urban Vegetation**: Target built-up areas with low NDVI for tree planting and green space development.",
-                    "🏙️ **Smart Urban Planning**: Design new developments with adequate green spaces to mitigate heat buildup.",
-                    "💧 **Expand Water Bodies**: Consider adding water features in hot zones for localized cooling effects.",
-                    "🌿 **Green Roofs & Walls**: Implement vegetation on buildings in dense urban areas where ground space is limited.",
-                    "📊 **Continuous Monitoring**: Regular satellite monitoring to track vegetation health and temperature trends."
-                ]
-                
-                for rec in recommendations:
-                    st.markdown(f"- {rec}")
-                
-            else:
-                st.warning("Insufficient data points for correlation analysis. Try adjusting the date range.")
-        else:
-            st.warning("No data available for correlation analysis. Check your date range and area selection.")
+    if not sample_data or 'features' not in sample_data or len(sample_data['features']) == 0:
+        st.warning("No data available for correlation analysis. Check your date range and area selection.")
+        raise StopIteration
+
+    data_list = []
+    for feature in sample_data['features']:
+        props = feature.get('properties', {})
+        if 'LST' in props and 'NDVI' in props and 'LandCover' in props:
+            data_list.append({
+                'LST': props['LST'],
+                'NDVI': props['NDVI'],
+                'LandCover': props['LandCover']
+            })
+
+    df_corr = pd.DataFrame(data_list)
+    if df_corr.empty:
+        st.warning("No valid sampled pixels found for correlation analysis.")
+        raise StopIteration
+
+    # Filter out invalid values
+    df_corr = df_corr[(df_corr['LST'] > -50) & (df_corr['LST'] < 60)]
+    df_corr = df_corr[(df_corr['NDVI'] >= -1) & (df_corr['NDVI'] <= 1)]
+
+    if len(df_corr) <= 10:
+        st.warning("Insufficient data points for correlation analysis. Try adjusting the date range.")
+        raise StopIteration
+
+    lulc_names = {
+        10: 'Tree Cover', 20: 'Shrubland', 30: 'Grassland', 40: 'Cropland',
+        50: 'Built-up', 60: 'Bare/Sparse', 70: 'Snow/Ice', 80: 'Water',
+        90: 'Wetland', 95: 'Mangroves', 100: 'Moss/Lichen'
+    }
+    df_corr['LandCover_Name'] = df_corr['LandCover'].map(lulc_names).fillna('Other')
+
+    corr_ndvi_lst = df_corr['NDVI'].corr(df_corr['LST'])
+    urban_temp = df_corr[df_corr['LandCover'] == 50]['LST'].mean() if 50 in df_corr['LandCover'].values else 0
+    veg_temp = df_corr[df_corr['LandCover'].isin([10, 20, 30])]['LST'].mean() if any(lc in df_corr['LandCover'].values for lc in [10, 20, 30]) else 0
+
+    st.subheader("Correlation Statistics")
+    c1, c2, c3, c4 = st.columns(4, gap="small")
+    with c1:
+        st.metric("NDVI-LST Correlation", f"{corr_ndvi_lst:.3f}", "Negative = vegetation cools")
+    with c2:
+        st.metric("Avg Urban Temperature", f"{urban_temp:.1f}°C" if urban_temp > 0 else "N/A", "Built-up areas")
+    with c3:
+        st.metric("Avg Vegetation Temperature", f"{veg_temp:.1f}°C" if veg_temp > 0 else "N/A", "Green areas")
+    with c4:
+        temp_diff = urban_temp - veg_temp if (urban_temp > 0 and veg_temp > 0) else None
+        st.metric("Urban Heat Island Effect", f"{temp_diff:.1f}°C" if temp_diff is not None else "N/A", "Urban vs Vegetation")
+
+    st.subheader("Correlation Visualizations")
+    v1, v2 = st.columns([1, 1], gap="medium")
+
+    with v1:
+        fig_scatter = go.Figure()
+        fig_scatter.add_trace(go.Scatter(
+            x=df_corr['NDVI'],
+            y=df_corr['LST'],
+            mode='markers',
+            marker=dict(size=7, opacity=0.55),
+            name='Samples'
+        ))
+
+        z = np.polyfit(df_corr['NDVI'], df_corr['LST'], 1)
+        p = np.poly1d(z)
+        x_trend = np.linspace(df_corr['NDVI'].min(), df_corr['NDVI'].max(), 100)
+        fig_scatter.add_trace(go.Scatter(
+            x=x_trend,
+            y=p(x_trend),
+            mode='lines',
+            name='Trend Line',
+            line=dict(color='black', width=2, dash='dash')
+        ))
+
+        fig_scatter.update_layout(
+            title=f'NDVI vs LST (Correlation: {corr_ndvi_lst:.3f})',
+            xaxis_title='Vegetation Index (NDVI)',
+            yaxis_title='Land Surface Temperature (°C)',
+            height=430,
+            template='plotly_white'
+        )
+        st.plotly_chart(fig_scatter, width='stretch')
+
+    with v2:
+        lulc_summary = df_corr.groupby('LandCover_Name').agg({
+            'LST': 'mean',
+            'LandCover': 'count'
+        }).rename(columns={'LandCover': 'Area_Count'})
+        lulc_summary['Area_Percent'] = (lulc_summary['Area_Count'] / len(df_corr) * 100).round(2)
+        lulc_summary = lulc_summary.sort_values('Area_Percent', ascending=True)
+
+        fig_area_temp = go.Figure()
+        fig_area_temp.add_trace(go.Bar(
+            y=lulc_summary.index,
+            x=lulc_summary['Area_Percent'],
+            orientation='h',
+            marker=dict(
+                color=lulc_summary['LST'],
+                colorscale='RdYlBu_r',
+                showscale=True,
+                colorbar=dict(title="Temp (°C)", x=1.12)
+            ),
+            text=lulc_summary['Area_Percent'].apply(lambda x: f'{x:.1f}%'),
+            textposition='auto'
+        ))
+        fig_area_temp.update_layout(
+            title='Land Cover Area Share (colored by temperature)',
+            xaxis_title='Area Share (%)',
+            yaxis_title='Land Use Type',
+            height=430,
+            template='plotly_white',
+            showlegend=False
+        )
+        st.plotly_chart(fig_area_temp, width='stretch')
+
+    st.subheader("Temperature & Area Statistics by Land Use Type")
+    lulc_stats = df_corr.groupby('LandCover_Name').agg({
+        'LST': ['count', 'mean', 'std', 'min', 'max'],
+        'NDVI': 'mean'
+    }).round(2)
+    lulc_stats.columns = ['Sample Count', 'Mean Temp (°C)', 'Std Dev', 'Min Temp (°C)', 'Max Temp (°C)', 'Avg NDVI']
+    lulc_stats['Area Coverage (%)'] = (lulc_stats['Sample Count'] / len(df_corr) * 100).round(2)
+    lulc_stats = lulc_stats[['Sample Count', 'Area Coverage (%)', 'Mean Temp (°C)', 'Avg NDVI', 'Std Dev', 'Min Temp (°C)', 'Max Temp (°C)']]
+    lulc_stats = lulc_stats.sort_values('Area Coverage (%)', ascending=False)
+    st.dataframe(lulc_stats, width='stretch')
+
+except StopIteration:
+    pass
             
 except Exception as corr_error:
     st.error(f"Error in correlation analysis: {str(corr_error)}")
