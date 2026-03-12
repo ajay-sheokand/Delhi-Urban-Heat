@@ -1194,11 +1194,41 @@ with col2:
 
 try:
     # Fetch Landsat 8 data for the selected date range
-    modis_collection = get_landsat8_collection(
+    lst_scene_collection = get_landsat8_collection(
         start_date.isoformat(),
         end_date.isoformat(),
         region
     ).select("LST")
+    day_span = max((end_date - start_date).days, 1)
+
+    # Use temporal compositing for long ranges to avoid Earth Engine
+    # "Too many concurrent aggregations" errors.
+    if day_span <= 365:
+        ts_collection = lst_scene_collection
+    else:
+        interval_months = 1 if day_span <= 3 * 365 else 3
+        start_ee = ee.Date(start_date.isoformat())
+        end_ee = ee.Date(end_date.isoformat()).advance(1, 'day')
+        total_months = ee.Number(end_ee.difference(start_ee, 'month')).ceil()
+        offsets = ee.List.sequence(0, total_months.subtract(1), interval_months)
+
+        def make_temporal_composite(offset):
+            offset = ee.Number(offset)
+            window_start = start_ee.advance(offset, 'month')
+            window_end = window_start.advance(interval_months, 'month')
+            window_coll = lst_scene_collection.filterDate(window_start, window_end)
+            composite = window_coll.median()
+            return composite.set({
+                'system:time_start': window_start.millis(),
+                'scene_count': window_coll.size(),
+            })
+
+        ts_collection = (
+            ee.ImageCollection.fromImages(offsets.map(make_temporal_composite))
+            .filter(ee.Filter.gt('scene_count', 0))
+            .sort('system:time_start')
+        )
+
     worldcover_ts = ee.ImageCollection("ESA/WorldCover/v200").first().select("Map").rename("LandCover")
 
     land_cover_name_map = {
@@ -1242,7 +1272,7 @@ try:
         })
     
     # Map the function over the collection
-    ts_data = modis_collection.map(extract_lst_stats)
+    ts_data = ts_collection.map(extract_lst_stats)
     
     # Get the data
     ts_list = ts_data.toList(ts_data.size()).getInfo()
