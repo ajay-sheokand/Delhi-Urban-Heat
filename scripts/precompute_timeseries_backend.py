@@ -22,6 +22,16 @@ def load_delhi_geometry_from_geojson(path: str) -> ee.Geometry:
     return merged
 
 
+def load_delhi_geometry_from_ee() -> ee.Geometry:
+    # Delhi boundary from GAUL level-1 is typically robust for server-side reducers.
+    delhi_fc = (
+        ee.FeatureCollection("FAO/GAUL_SIMPLIFIED_500m/2015/level1")
+        .filter(ee.Filter.eq("ADM0_NAME", "India"))
+        .filter(ee.Filter.eq("ADM1_NAME", "Delhi"))
+    )
+    return delhi_fc.geometry()
+
+
 def init_ee() -> None:
     service_account_email = os.environ.get("GEE_SERVICE_ACCOUNT", "").strip()
     private_key = os.environ.get("GEE_PRIVATE_KEY", "").strip()
@@ -86,7 +96,21 @@ def main() -> None:
 
     workspace = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     geojson_path = os.path.join(workspace, "delhi_admin.geojson")
-    region = load_delhi_geometry_from_geojson(geojson_path)
+    try:
+        region = load_delhi_geometry_from_geojson(geojson_path)
+        # Force a lightweight server validation so invalid geometries fail here.
+        _ = region.area(1).getInfo()
+        print("Using local geometry: delhi_admin.geojson")
+    except Exception as exc:
+        print(f"Local GeoJSON geometry invalid or unavailable: {exc}")
+        try:
+            region = load_delhi_geometry_from_ee()
+            _ = region.area(1).getInfo()
+            print("Using fallback geometry: FAO/GAUL_SIMPLIFIED_500m/2015/level1 (Delhi)")
+        except Exception as ee_exc:
+            print(f"EE Delhi geometry fallback failed: {ee_exc}")
+            region = ee.Geometry.Rectangle([76.8388, 28.4044, 77.3465, 28.8833])
+            print("Using final fallback geometry: Delhi rectangle")
 
     days_back = int(os.environ.get("PRECOMPUTE_DAYS", "730"))
     end_dt = datetime.utcnow().date()
