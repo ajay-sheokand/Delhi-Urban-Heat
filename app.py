@@ -1192,69 +1192,82 @@ with col1:
 with col2:
     end_date = st.date_input("End Date", datetime.now())
 
-try:
-    # Fetch Landsat 8 data for the selected date range
-    lst_scene_collection = get_landsat8_collection(
-        start_date.isoformat(),
-        end_date.isoformat(),
-        region
-    ).select("LST")
-    day_span = max((end_date - start_date).days, 1)
+if "ts_last_range" not in st.session_state:
+    st.session_state.ts_last_range = (start_date, end_date)
+if "ts_ready" not in st.session_state:
+    st.session_state.ts_ready = False
+
+current_ts_range = (start_date, end_date)
+if current_ts_range != st.session_state.ts_last_range:
+    st.session_state.ts_ready = False
+    st.session_state.ts_last_range = current_ts_range
+
+if st.button("Run Time Series Analysis", key="run_ts_analysis", type="primary"):
+    st.session_state.ts_ready = True
+
+include_lulc_split = st.checkbox(
+    "Include land-cover split in time series (slower)",
+    value=False,
+    help="When enabled, LST-by-land-cover lines are computed for every scene."
+)
+
+
+@st.cache_data(ttl=900)
+def load_precomputed_timeseries_dataset():
+    base_url = st.secrets.get("PRECOMPUTED_DATA_BASE_URL", "")
+    if not base_url:
+        return None
+    try:
+        base_url = str(base_url).rstrip("/")
+        response = requests.get(f"{base_url}/timeseries_scenes.json", timeout=20)
+        if response.status_code != 200:
+            return None
+        payload = response.json()
+        records = payload.get("records", []) if isinstance(payload, dict) else []
+        if not records:
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=900)
+def get_time_series_scene_inventory(start_iso: str, end_iso: str):
+    scene_collection = get_landsat8_collection(start_iso, end_iso, region)
+    scenes = get_available_landsat_scenes(scene_collection)
+    rows = [
+        {
+            "Date": s["date"].isoformat(),
+            "Time (UTC)": s["datetime"].strftime("%H:%M"),
+            "Cloud Cover (%)": "N/A" if s["cloud_cover"] is None else round(s["cloud_cover"], 1),
+            "Scene ID": s["scene_id"],
+        }
+        for s in scenes
+    ]
+    return {"rows": rows, "count": len(rows)}
+
+
+@st.cache_data(ttl=1800)
+def compute_lst_time_series(start_iso: str, end_iso: str, include_lulc_split: bool):
+    lst_scene_collection = get_landsat8_collection(start_iso, end_iso, region).select("LST")
     scene_count_estimate = lst_scene_collection.size().getInfo()
 
-    # Use temporal compositing aggressively when there are many images to avoid
-    # Earth Engine aggregation/concurrency limits.
-    if day_span <= 120 and scene_count_estimate <= 40:
-        ts_collection = lst_scene_collection
-    else:
-        if day_span > 3 * 365 or scene_count_estimate > 120:
-            interval_months = 3
-        else:
-            interval_months = 1
-
-        start_ee = ee.Date(start_date.isoformat())
-        end_ee = ee.Date(end_date.isoformat()).advance(1, 'day')
-        total_months = ee.Number(end_ee.difference(start_ee, 'month')).ceil()
-        offsets = ee.List.sequence(0, total_months.subtract(1), interval_months)
-
-        def make_temporal_composite(offset):
-            offset = ee.Number(offset)
-            window_start = start_ee.advance(offset, 'month')
-            window_end = window_start.advance(interval_months, 'month')
-            window_coll = lst_scene_collection.filterDate(window_start, window_end)
-            composite = window_coll.median()
-            return composite.set({
-                'system:time_start': window_start.millis(),
-                'scene_count': window_coll.size(),
-            })
-
-        ts_collection = (
-            ee.ImageCollection.fromImages(offsets.map(make_temporal_composite))
-            .filter(ee.Filter.gt('scene_count', 0))
-            .sort('system:time_start')
-        )
+    # Full-fidelity time series: use every available scene in range.
+    ts_collection = lst_scene_collection.sort('system:time_start')
 
     worldcover_ts = ee.ImageCollection("ESA/WorldCover/v200").first().select("Map").rename("LandCover")
-
     land_cover_name_map = {
-        "10": "Tree Cover",
-        "20": "Shrubland",
-        "30": "Grassland",
-        "40": "Cropland",
-        "50": "Built-up (Urban)",
-        "60": "Bare/Sparse Vegetation",
-        "70": "Snow/Ice",
-        "80": "Water Bodies",
-        "90": "Wetland",
-        "95": "Mangroves",
-        "100": "Moss/Lichen",
+        "10": "Tree Cover", "20": "Shrubland", "30": "Grassland", "40": "Cropland",
+        "50": "Built-up (Urban)", "60": "Bare/Sparse Vegetation", "70": "Snow/Ice",
+        "80": "Water Bodies", "90": "Wetland", "95": "Mangroves", "100": "Moss/Lichen",
     }
-    
-    # Build time-series sequentially to avoid Earth Engine concurrent aggregation limits.
+
     ts_count = ts_collection.size().getInfo()
+    if ts_count == 0:
+        return {"df_ts": [], "df_lulc_ts": [], "total_scene_count": scene_count_estimate, "processed_points": 0}
+
     ts_images = ts_collection.toList(ts_count)
 
-    # Create DataFrame inputs
     dates = []
     temps = []
     lulc_ts_rows = []
@@ -1266,7 +1279,7 @@ try:
         mean_lst = img.reduceRegion(
             reducer=ee.Reducer.mean(),
             geometry=region,
-            scale=100,
+            scale=250,
             maxPixels=1e9,
             bestEffort=True,
             tileScale=4
@@ -1276,32 +1289,122 @@ try:
             dates.append(date_str)
             temps.append(float(mean_lst))
 
-        grouped_stats = img.addBands(worldcover_ts).reduceRegion(
-            reducer=ee.Reducer.mean().group(groupField=1, groupName='landcover'),
-            geometry=region,
-            scale=250,
-            maxPixels=1e9,
-            bestEffort=True,
-            tileScale=4
-        ).get('groups').getInfo()
+        if include_lulc_split:
+            grouped_stats = img.addBands(worldcover_ts).reduceRegion(
+                reducer=ee.Reducer.mean().group(groupField=1, groupName='landcover'),
+                geometry=region,
+                scale=500,
+                maxPixels=1e9,
+                bestEffort=True,
+                tileScale=4
+            ).get('groups').getInfo()
 
-        for group_item in grouped_stats or []:
-            lc_code_raw = group_item.get('landcover')
-            lc_mean = group_item.get('mean')
-            if lc_code_raw is None or lc_mean is None:
-                continue
-            lc_code = str(int(lc_code_raw))
-            lulc_ts_rows.append({
-                'Date': pd.to_datetime(date_str),
-                'Land Cover': land_cover_name_map.get(lc_code, f'Class {lc_code}'),
-                'Mean LST (°C)': float(lc_mean),
-            })
+            for group_item in grouped_stats or []:
+                lc_code_raw = group_item.get('landcover')
+                lc_mean = group_item.get('mean')
+                if lc_code_raw is None or lc_mean is None:
+                    continue
+                lc_code = str(int(lc_code_raw))
+                lulc_ts_rows.append({
+                    'Date': date_str,
+                    'Land Cover': land_cover_name_map.get(lc_code, f'Class {lc_code}'),
+                    'Mean LST (°C)': float(lc_mean),
+                })
+
+    df_ts = pd.DataFrame({
+        'Date': pd.to_datetime(dates),
+        'Mean LST (°C)': temps
+    }).sort_values('Date') if dates else pd.DataFrame(columns=['Date', 'Mean LST (°C)'])
+
+    df_lulc_ts = pd.DataFrame(lulc_ts_rows)
+    if not df_lulc_ts.empty:
+        df_lulc_ts['Date'] = pd.to_datetime(df_lulc_ts['Date'])
+        df_lulc_ts = df_lulc_ts.sort_values(['Land Cover', 'Date'])
+
+    return {
+        "df_ts": df_ts.to_dict(orient='records'),
+        "df_lulc_ts": df_lulc_ts.to_dict(orient='records') if not df_lulc_ts.empty else [],
+        "total_scene_count": scene_count_estimate,
+        "processed_points": len(df_ts),
+    }
+
+try:
+    precomputed_payload = load_precomputed_timeseries_dataset()
+    using_precomputed = False
+
+    try:
+        if precomputed_payload:
+            all_rows = precomputed_payload.get("records", [])
+            inv_rows = []
+            for r in all_rows:
+                date_val = datetime.fromisoformat(str(r.get("date"))).date()
+                if start_date <= date_val <= end_date:
+                    inv_rows.append({
+                        "Date": r.get("date"),
+                        "Time (UTC)": r.get("time_utc", "N/A"),
+                        "Cloud Cover (%)": "N/A" if r.get("cloud_cover") is None else round(float(r.get("cloud_cover")), 1),
+                        "Scene ID": r.get("scene_id", "Unknown"),
+                    })
+            ts_inventory = {"rows": inv_rows, "count": len(inv_rows)}
+            using_precomputed = True
+            st.caption("Using precomputed backend data for time-series inventory.")
+        else:
+            ts_inventory = get_time_series_scene_inventory(start_date.isoformat(), end_date.isoformat())
+
+        inv_col1, inv_col2 = st.columns(2, gap="small")
+        with inv_col1:
+            st.metric("Scenes Available", ts_inventory["count"])
+        with inv_col2:
+            st.metric("Available Data Points", ts_inventory["count"])
+
+        with st.expander("View Available Scenes", expanded=False):
+            if ts_inventory["rows"]:
+                st.dataframe(pd.DataFrame(ts_inventory["rows"]), width='stretch', hide_index=True)
+            else:
+                st.caption("No scenes available for the selected date range.")
+    except Exception:
+        st.caption("Could not fetch full scene inventory for this date range.")
+
+    if not st.session_state.ts_ready:
+        st.caption("Set date range and click 'Run Time Series Analysis'.")
+        raise StopIteration
+
+    if using_precomputed and not include_lulc_split:
+        pre_df = pd.DataFrame(ts_inventory["rows"])
+        if not pre_df.empty:
+            pre_df["Date"] = pd.to_datetime(pre_df["Date"])
+            raw_records = precomputed_payload.get("records", []) if precomputed_payload else []
+            means = pd.DataFrame([
+                {
+                    "Date": pd.to_datetime(r.get("date")),
+                    "Mean LST (°C)": r.get("mean_lst_c"),
+                }
+                for r in raw_records
+                if r.get("mean_lst_c") is not None and start_date <= datetime.fromisoformat(str(r.get("date"))).date() <= end_date
+            ])
+            means = means.dropna().sort_values("Date")
+            ts_result = {
+                "df_ts": means.to_dict(orient="records"),
+                "df_lulc_ts": [],
+                "total_scene_count": len(means),
+                "processed_points": len(means),
+            }
+        else:
+            ts_result = {"df_ts": [], "df_lulc_ts": [], "total_scene_count": 0, "processed_points": 0}
+    else:
+        ts_result = compute_lst_time_series(start_date.isoformat(), end_date.isoformat(), include_lulc_split)
+
+    df_ts = pd.DataFrame(ts_result["df_ts"])
+    lulc_ts_rows = ts_result["df_lulc_ts"]
+
+    dp_col1, dp_col2 = st.columns(2, gap="small")
+    with dp_col1:
+        st.metric("Scenes Used by Engine", ts_result.get("total_scene_count", 0))
+    with dp_col2:
+        st.metric("Plotted Data Points", ts_result.get("processed_points", 0))
     
-    if dates:
-        df_ts = pd.DataFrame({
-            'Date': pd.to_datetime(dates),
-            'Mean LST (°C)': temps
-        })
+    if not df_ts.empty:
+        df_ts['Date'] = pd.to_datetime(df_ts['Date'])
         df_ts = df_ts.sort_values('Date')
         
         # Create interactive time series plot
@@ -1406,7 +1509,10 @@ try:
             st.metric("Data Points", len(df_ts))
     else:
         st.warning("No Landsat 8 data available for the selected date range.")
-        
+
+except StopIteration:
+    pass
+
 except Exception as e:
     st.error(f"Error fetching time series data: {str(e)}")
 

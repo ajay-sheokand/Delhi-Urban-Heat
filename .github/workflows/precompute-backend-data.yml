@@ -1,0 +1,48 @@
+name: Precompute Backend Data
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  precompute-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Precompute timeseries dataset
+        env:
+          GEE_SERVICE_ACCOUNT: ${{ secrets.GEE_SERVICE_ACCOUNT }}
+          GEE_PRIVATE_KEY: ${{ secrets.GEE_PRIVATE_KEY }}
+          PRECOMPUTE_DAYS: ${{ secrets.PRECOMPUTE_DAYS }}
+        run: |
+          python scripts/precompute_timeseries_backend.py
+
+      - name: Ensure pages content root
+        run: |
+          mkdir -p public
+          cp -r backend-data/* public/
+
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./public
+          force_orphan: true

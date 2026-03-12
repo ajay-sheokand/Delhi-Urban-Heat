@@ -247,6 +247,53 @@ streamlit run app.py
 
 Default URL: `http://localhost:8501`
 
+## Optional Fast Backend (GitHub Pages)
+
+This project includes a free precompute backend option using GitHub Actions + GitHub Pages.
+It publishes `timeseries_scenes.json` so the Time Series section can load quickly without recomputing from Earth Engine on every run.
+
+### Files Added
+
+- `.github/workflows/precompute-backend-data.yml`
+- `scripts/precompute_timeseries_backend.py`
+
+### 1. Add GitHub Repository Secrets
+
+In GitHub: `Settings -> Secrets and variables -> Actions`, add:
+
+- `GEE_SERVICE_ACCOUNT`
+- `GEE_PRIVATE_KEY`
+- `PRECOMPUTE_DAYS` (optional, example `730`)
+
+### 2. Enable GitHub Pages
+
+In GitHub: `Settings -> Pages`:
+
+- Source: `Deploy from a branch`
+- Branch: `gh-pages`
+- Folder: `/ (root)`
+
+### 3. Run the Workflow
+
+Go to `Actions -> Precompute Backend Data -> Run workflow`.
+
+The workflow also runs every 6 hours by schedule.
+
+### 4. Configure Streamlit to Read Precomputed Data
+
+Add this in `.streamlit/secrets.toml`:
+
+```toml
+PRECOMPUTED_DATA_BASE_URL = "https://<your-github-username>.github.io/<your-repo-name>"
+```
+
+The app will automatically use `PRECOMPUTED_DATA_BASE_URL/timeseries_scenes.json` when available.
+
+### Notes
+
+- If precomputed data is unavailable, the app falls back to live Earth Engine calculations.
+- Land-cover split in time series is still compute-heavy when enabled.
+
 ## Project Files
 
 - `app.py`: Main application logic
