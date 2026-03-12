@@ -12,6 +12,7 @@ import os
 
 import ee
 from google.oauth2 import service_account
+from branca.element import MacroElement, Template
 
 st.set_page_config(
     page_title="Delhi Urban Heat Monitor",
@@ -72,14 +73,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Delhi-NCR Urban Heat Monitoring Dashboard")
+st.title("Delhi Urban Heat Monitoring Dashboard")
 
 # Add info expander for better mobile experience
 with st.expander("ℹ️ About this Dashboard", expanded=False):
     st.markdown("""
     This dashboard combines:
-    - **Real-Time Air Temperature** - Live data from OpenWeather API for 11 Delhi districts
-    - **Satellite-Derived Land Surface Temperature (LST)** - MODIS satellite data from NASA
+    - **Air Temperature** - Live (OpenWeather) + Historical (NASA POWER) for 11 Delhi districts
+    - **Satellite-Derived Land Surface Temperature (LST)** - Landsat 8 L2 data (100m)
     - **Vegetation Index (NDVI)** - Greenery analysis and correlation with temperature
     - **Urban Heat Island Analysis** - Spatial heat distribution patterns
     
@@ -219,9 +220,9 @@ def load_district_boundaries():
     except Exception as e:
         return None
 
-st.subheader("MODIS Satellite-Derived Daily Land Surface Temperature (LST)")
+st.subheader("Landsat 8 Satellite-Derived Land Surface Temperature (LST) - 100m")
 
-# Date selection controls for MODIS layers
+# Date selection controls for Landsat 8 layers
 st.markdown("### 📅 Select Date Range for Satellite Data")
 
 col1, col2 = st.columns([1, 1], gap="medium")
@@ -230,7 +231,7 @@ with col1:
     modis_start_date = st.date_input(
         "Start Date",
         value=datetime(2025, 12, 31).date(),
-        min_value=datetime(2000, 1, 1).date(),
+        min_value=datetime(2013, 4, 11).date(),
         max_value=datetime.now().date(),
         key="modis_start"
     )
@@ -239,7 +240,7 @@ with col2:
     modis_end_date = st.date_input(
         "End Date",
         value=datetime(2026, 1, 30).date(),
-        min_value=datetime(2000, 1, 1).date(),
+        min_value=datetime(2013, 4, 11).date(),
         max_value=datetime.now().date(),
         key="modis_end"
     )
@@ -247,9 +248,6 @@ with col2:
 # Validate date ranges
 if modis_start_date >= modis_end_date:
     st.error("⚠️ Start Date must be before End Date")
-
-# Display selected date range
-st.info(f"📊 Loading satellite data (LST & NDVI) from **{modis_start_date}** to **{modis_end_date}** ({(modis_end_date - modis_start_date).days} days)")
 
 # Function to load Delhi districts from GeoJSON file
 @st.cache_data
@@ -266,11 +264,7 @@ def load_delhi_districts_from_kml():
         
         if os.path.exists(geojson_path):
             gdf = gpd.read_file(geojson_path)
-            st.success(f"✅ Loaded {len(gdf)} districts from GeoJSON")
         else:
-            st.warning(f"⚠️ District boundary files not found")
-            st.info(f"📂 Current directory: {current_dir}")
-            st.info(f"📁 Available files: {[f for f in os.listdir(current_dir) if not f.startswith('.')][:10]}")
             return None
         
         # Filter for Delhi districts only (should already be all Delhi from this file)
@@ -282,9 +276,6 @@ def load_delhi_districts_from_kml():
         return delhi_gdf
     except Exception as e:
         st.error(f"❌ Error loading district boundaries: {str(e)}")
-        st.info("💡 Tip: Ensure delhi_admin.geojson is in the repository and deployed")
-        import traceback
-        st.code(traceback.format_exc())
         return None
 
 # Function to create merged district geometry from KML for Earth Engine
@@ -324,8 +315,7 @@ def get_districts_ee_geometry():
             return ee.Geometry.Rectangle([76.8388, 28.4044, 77.3465, 28.8833])
         
         return ee_geom
-    except Exception as e:
-        st.warning(f"Using bounding box for clipping: {str(e)}")
+    except Exception:
         # Fallback to bounding box
         return ee.Geometry.Rectangle([76.8388, 28.4044, 77.3465, 28.8833])
 
@@ -347,23 +337,196 @@ def add_ee_layer(self, ee_image_object, vis_params, name, opacity=1.0):
             control=True,
             opacity=opacity,
         ).add_to(self)
-    except Exception as e:
-        st.warning(f"Could not load layer {name}: {str(e)}")
+    except Exception:
+        # Keep map rendering even if one Earth Engine layer fails.
+        pass
 
 folium.Map.add_ee_layer = add_ee_layer
 
-# Add MODIS LST layer with enhanced styling
-try:
-    # Fetch MODIS LST
-    lst = (
-        ee.ImageCollection("MODIS/061/MOD11A1")
-        .filterDate(modis_start_date.isoformat(), modis_end_date.isoformat())
-        .select("LST_Day_1km")
-        .mean()
+# Landsat 8 L2 helpers (cloud masking + scaling)
+def mask_landsat_l2(image):
+    qa = image.select("QA_PIXEL")
+    cloud_shadow_bit = 1 << 3
+    snow_bit = 1 << 4
+    cloud_bit = 1 << 5
+    cirrus_bit = 1 << 7
+    mask = (
+        qa.bitwiseAnd(cloud_shadow_bit).eq(0)
+        .And(qa.bitwiseAnd(snow_bit).eq(0))
+        .And(qa.bitwiseAnd(cloud_bit).eq(0))
+        .And(qa.bitwiseAnd(cirrus_bit).eq(0))
     )
-    
-    # Convert LST to Celsius
-    lst_celsius = lst.multiply(0.02).subtract(273.15)
+    return image.updateMask(mask)
+
+
+def prep_landsat8_l2(image):
+    # LST (Kelvin) -> Celsius
+    lst_k = image.select("ST_B10").multiply(0.00341802).add(149.0)
+    lst_c = lst_k.subtract(273.15).rename("LST")
+
+    # Surface reflectance scaling for NDVI
+    red = image.select("SR_B4").multiply(0.0000275).add(-0.2)
+    nir = image.select("SR_B5").multiply(0.0000275).add(-0.2)
+    ndvi = nir.subtract(red).divide(nir.add(red)).rename("NDVI")
+
+    return image.addBands([lst_c, ndvi]).select(["LST", "NDVI"])
+
+
+def get_landsat8_collection(start_date, end_date, geom):
+    return (
+        ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+        .filterDate(start_date, end_date)
+        .filterBounds(geom)
+        .filter(ee.Filter.lt("CLOUD_COVER", 60))
+        .map(mask_landsat_l2)
+        .map(prep_landsat8_l2)
+    )
+
+
+def get_landsat8_scene_collection_near_date(target_date, geom, window_days=8):
+    start_date = (target_date - timedelta(days=window_days)).isoformat()
+    end_date = (target_date + timedelta(days=window_days)).isoformat()
+    return get_landsat8_collection(start_date, end_date, geom)
+
+
+# Prepare Landsat 8 collection once for LST and NDVI
+landsat_collection = get_landsat8_collection(
+    modis_start_date.isoformat(),
+    modis_end_date.isoformat(),
+    districts_geometry if districts_geometry else region
+)
+
+
+@st.cache_data(ttl=3600)
+def get_available_landsat_scenes(_collection):
+    try:
+        time_starts = _collection.aggregate_array("system:time_start").getInfo()
+        cloud_covers = _collection.aggregate_array("CLOUD_COVER").getInfo()
+        product_ids = _collection.aggregate_array("LANDSAT_PRODUCT_ID").getInfo()
+        system_indexes = _collection.aggregate_array("system:index").getInfo()
+    except Exception:
+        return []
+    if not time_starts:
+        return []
+
+    scenes = []
+    for ms, cloud_value_raw, product_id, system_index in zip(time_starts, cloud_covers, product_ids, system_indexes):
+        if ms is None:
+            continue
+        scene_dt = datetime.utcfromtimestamp(ms / 1000)
+        scene_date = scene_dt.date()
+        scene_time = scene_dt.strftime("%H:%M UTC")
+        cloud_value = float(cloud_value_raw) if cloud_value_raw is not None else None
+        scene_id = str(product_id or system_index or "Unknown Scene")
+        if cloud_value is None:
+            label = f"{scene_date.isoformat()} {scene_time} | Cloud: N/A | {scene_id}"
+        else:
+            label = f"{scene_date.isoformat()} {scene_time} | Cloud: {cloud_value:.1f}% | {scene_id}"
+        scenes.append({
+            "date": scene_date,
+            "datetime": scene_dt,
+            "cloud_cover": cloud_value,
+            "scene_id": scene_id,
+            "label": label,
+        })
+    scenes.sort(key=lambda x: x["datetime"])
+    return scenes
+
+# Map display mode: median composite vs explicit scene selection
+map_mode = st.radio(
+    "Map display mode",
+    ["Median composite (range)", "Scene selection (single scene)"],
+    index=1,
+    horizontal=True
+)
+
+map_lst = None
+map_ndvi = None
+map_scene_label = None
+
+if map_mode == "Scene selection (single scene)":
+    available_scenes = get_available_landsat_scenes(landsat_collection)
+    if available_scenes:
+        st.caption("Scene source: Landsat 8 Collection 2 Level-2 (LANDSAT/LC08/C02/T1_L2)")
+
+        scene_labels = [scene["label"] for scene in available_scenes]
+        selected_label = st.selectbox(
+            "Select scene",
+            options=scene_labels,
+            index=len(scene_labels) - 1,
+        )
+
+        scene_pane_df = pd.DataFrame(
+            [
+                {
+                    "Date": scene["date"].isoformat(),
+                    "Time (UTC)": scene["datetime"].strftime("%H:%M"),
+                    "Satellite Data": "Landsat 8 L2",
+                    "Scene ID": scene["scene_id"],
+                    "Cloud Cover (%)": "N/A" if scene["cloud_cover"] is None else round(scene["cloud_cover"], 1),
+                }
+                for scene in available_scenes
+            ]
+        )
+        st.dataframe(scene_pane_df, width='stretch', hide_index=True)
+
+        selected_scene = next(scene for scene in available_scenes if scene["label"] == selected_label)
+        selected_cloud_text = "N/A" if selected_scene["cloud_cover"] is None else f"{selected_scene['cloud_cover']:.1f}%"
+        st.caption(
+            f"Selected scene: {selected_scene['scene_id']} | "
+            f"{selected_scene['datetime'].strftime('%Y-%m-%d %H:%M UTC')} | "
+            f"Cloud cover: {selected_cloud_text}"
+        )
+        map_date = selected_scene["date"]
+        scene_collection = landsat_collection.filter(
+            ee.Filter.eq("LANDSAT_PRODUCT_ID", selected_scene["scene_id"])
+        )
+        if scene_collection.size().getInfo() == 0:
+            scene_collection = landsat_collection.filter(
+                ee.Filter.eq("system:index", selected_scene["scene_id"])
+            )
+    else:
+        st.warning("No Landsat 8 scenes available in the selected date range.")
+        map_date = modis_end_date
+        scene_collection = get_landsat8_scene_collection_near_date(
+            map_date,
+            districts_geometry if districts_geometry else region
+        )
+    try:
+        scene_count = scene_collection.size().getInfo()
+    except Exception:
+        scene_count = 0
+
+    if scene_count == 0:
+        st.warning("Selected scene could not be loaded. Using range median instead.")
+        map_lst = landsat_collection.select("LST").median()
+        map_ndvi = landsat_collection.select("NDVI").median()
+        map_scene_label = "Median composite"
+    else:
+        scene = scene_collection.sort("CLOUD_COVER").first()
+        map_lst = ee.Image(scene).select("LST")
+        map_ndvi = ee.Image(scene).select("NDVI")
+        try:
+            scene_date = ee.Date(ee.Image(scene).get("system:time_start")).format("YYYY-MM-dd").getInfo()
+            map_scene_label = f"Selected scene: {scene_date}"
+        except Exception:
+            map_scene_label = "Selected scene"
+else:
+    map_lst = landsat_collection.select("LST").median()
+    map_ndvi = landsat_collection.select("NDVI").median()
+    map_scene_label = "Median composite"
+
+lst_layer_name = None
+ndvi_layer_name = None
+land_cover_layer_name = None
+land_cover_source_note = None
+viz_min = 10
+viz_max = 40
+
+# Add Landsat 8 LST layer with enhanced styling
+try:
+    # LST map layer (composite or selected scene)
+    lst_celsius = map_lst
     
     # Calculate dynamic min/max values from the actual data for better visualization
     if districts_geometry:
@@ -377,25 +540,23 @@ try:
         stats = display_layer.reduceRegion(
             reducer=ee.Reducer.minMax(),
             geometry=districts_geometry if districts_geometry else region,
-            scale=1000,
+            scale=100,
             maxPixels=1e9
         ).getInfo()
         
         # Extract min/max values with fallback
-        data_min = stats.get('LST_Day_1km_min', 10)
-        data_max = stats.get('LST_Day_1km_max', 40)
+        data_min = stats.get('LST_min', 10)
+        data_max = stats.get('LST_max', 40)
         
         # Add some buffer to the range for better color distribution
         buffer = (data_max - data_min) * 0.1
         viz_min = max(data_min - buffer, -5)
         viz_max = min(data_max + buffer, 55)
         
-        st.info(f"📊 LST Range: {data_min:.1f}°C to {data_max:.1f}°C (Visualization: {viz_min:.1f}°C to {viz_max:.1f}°C)")
     except:
         # Fallback to seasonal defaults if calculation fails
         viz_min = 10
         viz_max = 40
-        st.warning("Using default temperature range (10-40°C)")
     
     # Set visualization parameters with dynamic range
     vis_params = {
@@ -413,23 +574,15 @@ try:
     }
     
     # Add the layer to the map
-    m.add_ee_layer(display_layer, vis_params, "🌡️ Land Surface Temperature (°C)", opacity=0.6)
+    lst_layer_name = f"🌡️ Land Surface Temperature (°C) - Landsat 8 ({map_scene_label})"
+    m.add_ee_layer(display_layer, vis_params, lst_layer_name, opacity=0.6)
     
 except Exception as lst_error:
     st.error(f"Error loading LST layer: {str(lst_error)}")
 
 # Add NDVI layer for greenery visualization with enhanced colors
 try:
-    # Use MODIS NDVI which is more reliable and always available
-    modis_ndvi = (
-        ee.ImageCollection("MODIS/061/MOD13A2")  # MODIS Vegetation Indices
-        .filterDate(modis_start_date.isoformat(), modis_end_date.isoformat())
-        .select("NDVI")
-        .mean()
-    )
-    
-    # Scale NDVI values (MODIS returns values 0-10000, need to scale to -1 to 1)
-    ndvi = modis_ndvi.divide(10000)
+    ndvi = map_ndvi
     
     # NDVI false color visualization parameters
     ndvi_vis_params = {
@@ -450,9 +603,11 @@ try:
     # Clip to district boundaries if available
     if districts_geometry:
         ndvi_clipped = ndvi.clip(districts_geometry)
-        m.add_ee_layer(ndvi_clipped, ndvi_vis_params, "🌿 Vegetation Index - NDVI", opacity=0.45)
+        ndvi_layer_name = f"🌿 Vegetation Index - NDVI (Landsat 8, {map_scene_label})"
+        m.add_ee_layer(ndvi_clipped, ndvi_vis_params, ndvi_layer_name, opacity=0.45)
     else:
-        m.add_ee_layer(ndvi, ndvi_vis_params, "🌿 Vegetation Index - NDVI", opacity=0.45)
+        ndvi_layer_name = f"🌿 Vegetation Index - NDVI (Landsat 8, {map_scene_label})"
+        m.add_ee_layer(ndvi, ndvi_vis_params, ndvi_layer_name, opacity=0.45)
 except Exception as ndvi_error:
     try:
         # Fallback to Sentinel-2 with very lenient filtering
@@ -479,14 +634,19 @@ except Exception as ndvi_error:
         # Clip to district boundaries if available
         if districts_geometry:
             ndvi_sent_clipped = ndvi_sent.clip(districts_geometry)
-            m.add_ee_layer(ndvi_sent_clipped, ndvi_vis_params, "🌿 Vegetation Index - NDVI", opacity=0.45)
+            ndvi_layer_name = "🌿 Vegetation Index - NDVI"
+            m.add_ee_layer(ndvi_sent_clipped, ndvi_vis_params, ndvi_layer_name, opacity=0.45)
         else:
-            m.add_ee_layer(ndvi_sent, ndvi_vis_params, "🌿 Vegetation Index - NDVI", opacity=0.45)
+            ndvi_layer_name = "🌿 Vegetation Index - NDVI"
+            m.add_ee_layer(ndvi_sent, ndvi_vis_params, ndvi_layer_name, opacity=0.45)
     except Exception as fallback_e:
         st.warning(f"Vegetation layer temporarily unavailable")
 
-# Add Land Use / Land Cover Layers
-st.subheader("🏙️ Land Use / Land Cover Analysis")
+# Add Land Use / Land Cover layers (stats shown after the map)
+land_use_stats = None
+land_use_histogram = None
+land_use_total_pixels = None
+land_use_layer_note = None
 
 try:
     # Option 1: ESA WorldCover (10m resolution - High detail)
@@ -517,13 +677,17 @@ try:
     
     if districts_geometry:
         worldcover_clipped = worldcover.clip(districts_geometry)
-        m.add_ee_layer(worldcover_clipped, worldcover_vis, "🌍 Land Cover (ESA 10m)", opacity=0.5)
+        land_cover_layer_name = "🌍 Land Cover (ESA 10m)"
+        m.add_ee_layer(worldcover_clipped, worldcover_vis, land_cover_layer_name, opacity=0.5)
+        stats_image = worldcover_clipped
     else:
-        m.add_ee_layer(worldcover, worldcover_vis, "🌍 Land Cover (ESA 10m)", opacity=0.5)
+        land_cover_layer_name = "🌍 Land Cover (ESA 10m)"
+        m.add_ee_layer(worldcover, worldcover_vis, land_cover_layer_name, opacity=0.5)
+        stats_image = worldcover
+    land_cover_source_note = "ESA WorldCover 2021 (10m)"
     
-    # Calculate land use statistics
     try:
-        land_use_stats = worldcover_clipped.reduceRegion(
+        land_use_stats = stats_image.reduceRegion(
             reducer=ee.Reducer.frequencyHistogram(),
             geometry=districts_geometry if districts_geometry else region,
             scale=100,
@@ -531,47 +695,15 @@ try:
         ).getInfo()
         
         if land_use_stats and 'Map' in land_use_stats:
-            land_class_names = {
-                '10': 'Tree Cover', '20': 'Shrubland', '30': 'Grassland', 
-                '40': 'Cropland', '50': 'Built-up (Urban)', '60': 'Bare/Sparse Vegetation',
-                '70': 'Snow/Ice', '80': 'Water Bodies', '90': 'Wetland', 
-                '95': 'Mangroves', '100': 'Moss/Lichen'
-            }
-            
-            histogram = land_use_stats['Map']
-            total_pixels = sum(histogram.values())
-            
-            st.markdown("### 📊 Land Use Distribution")
-            
-            # Create columns for land use stats
-            col1, col2, col3, col4 = st.columns(4, gap="small")
-            
-            # Calculate percentages
-            land_use_pct = {land_class_names.get(k, k): (v/total_pixels)*100 
-                           for k, v in histogram.items()}
-            
-            # Sort by percentage
-            sorted_land_use = sorted(land_use_pct.items(), key=lambda x: x[1], reverse=True)
-            
-            # Display top land uses in metrics
-            for idx, (land_type, percentage) in enumerate(sorted_land_use[:4]):
-                with [col1, col2, col3, col4][idx]:
-                    st.metric(land_type, f"{percentage:.1f}%")
-            
-            # Show all land uses in a table
-            if len(sorted_land_use) > 4:
-                import pandas as pd
-                df_land_use = pd.DataFrame(sorted_land_use, columns=['Land Use Type', 'Coverage (%)'])
-                df_land_use['Coverage (%)'] = df_land_use['Coverage (%)'].round(2)
-                st.dataframe(df_land_use, width='stretch', hide_index=True)
-                
-    except Exception as stats_error:
-        st.info("💡 Land use statistics calculation in progress...")
+            land_use_histogram = land_use_stats['Map']
+            land_use_total_pixels = sum(land_use_histogram.values())
+    except Exception:
+        land_use_layer_note = "Land use statistics calculation in progress..."
+
+    land_use_layer_note = "✅ High-resolution land cover layer (10m) added to map"
     
-    st.success("✅ High-resolution land cover layer (10m) added to map")
-    
-except Exception as worldcover_error:
-    st.warning(f"ESA WorldCover not available, trying MODIS Land Cover...")
+except Exception:
+    land_use_layer_note = "ESA WorldCover not available, trying MODIS Land Cover..."
     
     try:
         # Fallback: MODIS Land Cover (500m resolution)
@@ -590,17 +722,17 @@ except Exception as worldcover_error:
         
         if districts_geometry:
             modis_lc_clipped = modis_lc.clip(districts_geometry)
-            m.add_ee_layer(modis_lc_clipped, modis_lc_vis, "🌍 Land Cover (MODIS 500m)", opacity=0.5)
+            land_cover_layer_name = "🌍 Land Cover (MODIS 500m)"
+            m.add_ee_layer(modis_lc_clipped, modis_lc_vis, land_cover_layer_name, opacity=0.5)
         else:
-            m.add_ee_layer(modis_lc, modis_lc_vis, "🌍 Land Cover (MODIS 500m)", opacity=0.5)
+            land_cover_layer_name = "🌍 Land Cover (MODIS 500m)"
+            m.add_ee_layer(modis_lc, modis_lc_vis, land_cover_layer_name, opacity=0.5)
+        land_cover_source_note = "MODIS MCD12Q1 (500m) - IGBP LC_Type1 classes"
         
-        st.info("ℹ️ Using MODIS Land Cover (500m resolution)")
+        land_use_layer_note = "ℹ️ Using MODIS Land Cover (500m resolution)"
         
-    except Exception as modis_lc_error:
-        st.warning("Land cover layers temporarily unavailable")
-
-except Exception as lc_error:
-    st.warning(f"Could not load land cover data: {str(lc_error)}")
+    except Exception:
+        land_use_layer_note = "Land cover layers temporarily unavailable"
 
 
 # Locations for weather monitoring - All 11 Delhi districts
@@ -628,6 +760,37 @@ def get_weather(lat, lon):
         "feels_like": data["main"]["feels_like"]
     }
 
+
+@st.cache_data(ttl=86400)
+def get_power_air_temp(lat, lon, start_date, end_date):
+    start_str = start_date.strftime("%Y%m%d")
+    end_str = end_date.strftime("%Y%m%d")
+    url = (
+        "https://power.larc.nasa.gov/api/temporal/daily/point"
+        f"?parameters=T2M&start={start_str}&end={end_str}"
+        f"&latitude={lat}&longitude={lon}&community=RE&format=JSON"
+    )
+    response = requests.get(url, timeout=30)
+    if response.status_code != 200:
+        return None
+    payload = response.json()
+    values = payload.get("properties", {}).get("parameter", {}).get("T2M", {})
+    temps = [v for v in values.values() if v is not None and v > -900]
+    if not temps:
+        return None
+    return sum(temps) / len(temps)
+
+
+def get_lst_at_point(lst_image, lon, lat):
+    try:
+        point = ee.Geometry.Point([lon, lat])
+        sample = lst_image.sample(point, 100).first()
+        if sample is None:
+            return None
+        return ee.Number(sample.get("LST")).getInfo()
+    except Exception:
+        return None
+
 # Function for heat alerts
 def heat_alert(temp):
     if temp >= 40:
@@ -638,6 +801,8 @@ def heat_alert(temp):
         return "🌤️ Normal Temperature."
 
 # Add weather markers to map with enhanced styling
+weather_markers_group = folium.FeatureGroup(name="🌤️ Live Weather Markers", show=True)
+
 for name, lat, lon in locations:
     w = get_weather(lat, lon)
     alert = heat_alert(w["temperature"])
@@ -686,7 +851,9 @@ for name, lat, lon in locations:
             prefix=icon_prefix,
             icon_color='white'
         ),
-    ).add_to(m)
+    ).add_to(weather_markers_group)
+
+weather_markers_group.add_to(m)
 
 # Add district boundaries from KML to map
 try:
@@ -723,75 +890,252 @@ except Exception as e:
     st.warning(f"Could not load district boundaries: {str(e)}")
     pass
 
-# Add LULC Legend to lower right corner
-lulc_legend_html = """
-<div style="position: fixed; 
-            bottom: 50px; 
-            right: 10px; 
-            width: 220px; 
-            background-color: white; 
-            border: 2px solid grey; 
-            border-radius: 5px; 
-            z-index: 9999; 
-            font-size: 12px;
-            padding: 10px;
-            box-shadow: 2px 2px 6px rgba(0,0,0,0.3);">
-    <div style="text-align: center; font-weight: bold; font-size: 14px; margin-bottom: 8px; border-bottom: 1px solid #ccc; padding-bottom: 5px;">
-        🌍 Land Cover Legend
+# Add dynamic legends for raster layers (visible only when corresponding layer is selected)
+legend_layer_map = {}
+if lst_layer_name:
+    legend_layer_map[lst_layer_name] = "legend-lst"
+if ndvi_layer_name:
+    legend_layer_map[ndvi_layer_name] = "legend-ndvi"
+if land_cover_layer_name:
+    legend_layer_map[land_cover_layer_name] = "legend-landcover"
+
+land_cover_footer = land_cover_source_note if land_cover_source_note else "Land cover source"
+
+if land_cover_layer_name == "🌍 Land Cover (MODIS 500m)":
+    land_cover_classes = [
+        ("1", "#05450a", "Evergreen Needleleaf Forest"),
+        ("2", "#086a10", "Evergreen Broadleaf Forest"),
+        ("3", "#54a708", "Deciduous Needleleaf Forest"),
+        ("4", "#78d203", "Deciduous Broadleaf Forest"),
+        ("5", "#009900", "Mixed Forest"),
+        ("6", "#c6b044", "Closed Shrublands"),
+        ("7", "#dcd159", "Open Shrublands"),
+        ("8", "#dade48", "Woody Savannas"),
+        ("9", "#fbff13", "Savannas"),
+        ("10", "#b6ff05", "Grasslands"),
+        ("11", "#27ff87", "Permanent Wetlands"),
+        ("12", "#c24f44", "Croplands"),
+        ("13", "#a5a5a5", "Urban/Built-up"),
+        ("14", "#ff6d4c", "Cropland/Natural Mosaic"),
+        ("15", "#69fff8", "Snow/Ice"),
+        ("16", "#f9ffa4", "Barren/Sparsely Vegetated"),
+        ("17", "#1c0dff", "Water Bodies"),
+    ]
+else:
+    land_cover_classes = [
+        ("10", "#006400", "Tree Cover"),
+        ("20", "#FFBB22", "Shrubland"),
+        ("30", "#FFFF4C", "Grassland"),
+        ("40", "#F096FF", "Cropland"),
+        ("50", "#FA0000", "Built-up (Urban)"),
+        ("60", "#B4B4B4", "Bare/Sparse Veg"),
+        ("70", "#F0F0F0", "Snow/Ice"),
+        ("80", "#0064C8", "Water Bodies"),
+        ("90", "#0096A0", "Wetland"),
+        ("95", "#00CF75", "Mangroves"),
+        ("100", "#FAE6A0", "Moss/Lichen"),
+    ]
+
+# Filter legend to only classes that are present in the current land-cover histogram.
+present_class_ids = set(str(k) for k in land_use_histogram.keys()) if isinstance(land_use_histogram, dict) else set()
+if present_class_ids:
+    filtered_land_cover_classes = [c for c in land_cover_classes if c[0] in present_class_ids]
+    if filtered_land_cover_classes:
+        land_cover_classes = filtered_land_cover_classes
+        land_cover_footer = f"{land_cover_footer} | Showing {len(land_cover_classes)} present classes"
+
+land_cover_items_html = "".join(
+    f'<div class="legend-item"><span class="legend-swatch" style="background-color: {color};"></span><span>{label}</span></div>'
+    for _, color, label in land_cover_classes
+)
+
+dynamic_legends_html = f"""
+<style>
+    .dynamic-legend {{
+        position: fixed !important;
+        right: 10px !important;
+        width: 250px !important;
+        background-color: #ffffff !important;
+        border: 2px solid #808080 !important;
+        border-radius: 6px !important;
+        z-index: 10000 !important;
+        font-size: 12px !important;
+        padding: 10px !important;
+        color: #111111 !important;
+        box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.3) !important;
+        bottom: 50px !important;
+    }}
+    @media (max-width: 768px) {{
+        .dynamic-legend {{
+            width: min(250px, calc(100vw - 20px)) !important;
+            right: 8px !important;
+        }}
+    }}
+    .dynamic-legend-title {{
+        text-align: center !important;
+        font-weight: bold !important;
+        font-size: 13px !important;
+        margin-bottom: 8px !important;
+        border-bottom: 1px solid #cccccc !important;
+        padding-bottom: 5px !important;
+        color: inherit !important;
+    }}
+    .legend-gradient {{
+        width: 100% !important;
+        height: 14px !important;
+        border: 1px solid #333333 !important;
+        border-radius: 3px !important;
+        margin: 6px 0 4px 0 !important;
+    }}
+    .legend-scale {{
+        display: flex !important;
+        justify-content: space-between !important;
+        font-size: 10px !important;
+        color: #555555 !important;
+    }}
+    .legend-items {{
+        max-height: 180px !important;
+        overflow-y: auto !important;
+    }}
+    .legend-item {{
+        margin: 3px 0 !important;
+        display: flex !important;
+        align-items: center !important;
+        color: inherit !important;
+    }}
+    .legend-swatch {{
+        width: 18px !important;
+        height: 13px !important;
+        display: inline-block !important;
+        margin-right: 8px !important;
+        border: 1px solid #000000 !important;
+    }}
+    .legend-footer {{
+        margin-top: 8px !important;
+        padding-top: 5px !important;
+        border-top: 1px solid #cccccc !important;
+        font-size: 10px !important;
+        color: #666666 !important;
+        text-align: center !important;
+    }}
+    @media (prefers-color-scheme: dark) {{
+        .dynamic-legend {{
+            background-color: rgba(18, 18, 18, 0.95) !important;
+            border-color: #b0b0b0 !important;
+            color: #f2f2f2 !important;
+        }}
+        .legend-scale,
+        .legend-footer {{
+            color: #d0d0d0 !important;
+        }}
+        .dynamic-legend-title,
+        .legend-footer {{
+            border-color: #555555 !important;
+        }}
+    }}
+</style>
+
+<div id="legend-lst" class="dynamic-legend" style="display: block; bottom: 50px !important;">
+    <div class="dynamic-legend-title">🌡️ LST Legend (deg C)</div>
+    <div class="legend-gradient" style="background: linear-gradient(to right, #0000ff, #00ccff, #00ff00, #ffff00, #ff8800, #ff0000, #8b0000) !important;"></div>
+    <div class="legend-scale">
+        <span>{viz_min:.1f} deg C</span>
+        <span>{viz_max:.1f} deg C</span>
     </div>
-    <div style="max-height: 300px; overflow-y: auto;">
-        <div style="margin: 3px 0; display: flex; align-items: center;">
-            <span style="background-color: #006400; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
-            <span>Tree Cover</span>
-        </div>
-        <div style="margin: 3px 0; display: flex; align-items: center;">
-            <span style="background-color: #FFBB22; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
-            <span>Shrubland</span>
-        </div>
-        <div style="margin: 3px 0; display: flex; align-items: center;">
-            <span style="background-color: #FFFF4C; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
-            <span>Grassland</span>
-        </div>
-        <div style="margin: 3px 0; display: flex; align-items: center;">
-            <span style="background-color: #F096FF; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
-            <span>Cropland</span>
-        </div>
-        <div style="margin: 3px 0; display: flex; align-items: center;">
-            <span style="background-color: #FA0000; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
-            <span><b>Built-up (Urban)</b></span>
-        </div>
-        <div style="margin: 3px 0; display: flex; align-items: center;">
-            <span style="background-color: #B4B4B4; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
-            <span>Bare/Sparse Veg</span>
-        </div>
-        <div style="margin: 3px 0; display: flex; align-items: center;">
-            <span style="background-color: #F0F0F0; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
-            <span>Snow/Ice</span>
-        </div>
-        <div style="margin: 3px 0; display: flex; align-items: center;">
-            <span style="background-color: #0064C8; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
-            <span>Water Bodies</span>
-        </div>
-        <div style="margin: 3px 0; display: flex; align-items: center;">
-            <span style="background-color: #0096A0; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
-            <span>Wetland</span>
-        </div>
-        <div style="margin: 3px 0; display: flex; align-items: center;">
-            <span style="background-color: #00CF75; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
-            <span>Mangroves</span>
-        </div>
-        <div style="margin: 3px 0; display: flex; align-items: center;">
-            <span style="background-color: #FAE6A0; width: 20px; height: 15px; display: inline-block; margin-right: 8px; border: 1px solid #000;"></span>
-            <span>Moss/Lichen</span>
-        </div>
+</div>
+
+<div id="legend-ndvi" class="dynamic-legend" style="display: block; bottom: 140px !important;">
+    <div class="dynamic-legend-title">🌿 NDVI Legend</div>
+    <div class="legend-gradient" style="background: linear-gradient(to right, #8B0000, #DC143C, #FF4500, #FFD700, #FFFF00, #7FFF00, #00FF00, #006400) !important;"></div>
+    <div class="legend-scale">
+        <span>-0.3</span>
+        <span>1.0</span>
     </div>
-    <div style="margin-top: 8px; padding-top: 5px; border-top: 1px solid #ccc; font-size: 10px; color: #666; text-align: center;">
-        ESA WorldCover 2021 (10m)
+</div>
+
+<div id="legend-landcover" class="dynamic-legend" style="display: block; bottom: 230px !important;">
+    <div class="dynamic-legend-title">🌍 Land Cover Legend</div>
+    <div class="legend-items">
+        {land_cover_items_html}
     </div>
+    <div class="legend-footer">{land_cover_footer}</div>
 </div>
 """
 
-m.get_root().html.add_child(folium.Element(lulc_legend_html))
+m.get_root().html.add_child(folium.Element(dynamic_legends_html))
+
+# Attach legend behavior directly to the Folium map context.
+legend_script = f"""
+{{% macro script(this, kwargs) %}}
+var map = {{{{this._parent.get_name()}}}};
+var legendLayerMap = {json.dumps(legend_layer_map)};
+var legendOrder = ["legend-landcover", "legend-ndvi", "legend-lst"];
+
+function layoutVisibleLegends() {{
+    var bottomOffset = 50;
+    var gap = 10;
+    legendOrder.forEach(function(legendId) {{
+        var legend = document.getElementById(legendId);
+        if (!legend) return;
+        if (legend.style.display === "block") {{
+            legend.style.bottom = bottomOffset + "px";
+            bottomOffset += legend.offsetHeight + gap;
+        }}
+    }});
+}}
+
+function toggleLegend(legendId, isVisible) {{
+    var legend = document.getElementById(legendId);
+    if (!legend) return;
+    legend.style.display = isVisible ? "block" : "none";
+    layoutVisibleLegends();
+}}
+
+function syncLegendsWithMapState() {{
+    var visibleByLegendId = {{}};
+
+    // Start with all legend panels hidden.
+    Object.keys(legendLayerMap).forEach(function(layerName) {{
+        visibleByLegendId[legendLayerMap[layerName]] = false;
+    }});
+
+    // Preferred method: read checked overlays from LayerControl DOM.
+    var overlayLabels = document.querySelectorAll('.leaflet-control-layers-overlays label');
+    if (overlayLabels && overlayLabels.length > 0) {{
+        overlayLabels.forEach(function(labelEl) {{
+            var input = labelEl.querySelector('input[type="checkbox"]');
+            if (!input || !input.checked) return;
+            var labelText = (labelEl.textContent || '').trim();
+            var legendId = legendLayerMap[labelText];
+            if (legendId) visibleByLegendId[legendId] = true;
+        }});
+    }} else {{
+        // Fallback: inspect active map layers.
+        Object.keys(map._layers).forEach(function(layerKey) {{
+            var layer = map._layers[layerKey];
+            if (!layer || !layer.options || !layer.options.name) return;
+            var legendId = legendLayerMap[layer.options.name];
+            if (!legendId) return;
+            if (map.hasLayer(layer)) visibleByLegendId[legendId] = true;
+        }});
+    }}
+
+    Object.keys(visibleByLegendId).forEach(function(legendId) {{
+        toggleLegend(legendId, visibleByLegendId[legendId]);
+    }});
+}}
+
+window.addEventListener("resize", layoutVisibleLegends);
+syncLegendsWithMapState();
+
+// Keep legend state in sync even if overlay events are not propagated by the host iframe.
+setInterval(syncLegendsWithMapState, 400);
+{{% endmacro %}}
+"""
+
+legend_macro = MacroElement()
+legend_macro._template = Template(legend_script)
+m.get_root().add_child(legend_macro)
 
 # Add layer control to the map
 folium.LayerControl(position='topright', collapsed=False).add_to(m)
@@ -799,8 +1143,47 @@ folium.LayerControl(position='topright', collapsed=False).add_to(m)
 # Render map in Streamlit - Responsive width
 st_folium(m, width=None, height=600, returned_objects=[])
 
-# Time Series Analysis of MODIS LST
-st.subheader("Time Series Analysis - Historical MODIS Land Surface Temperature")
+# Land Use / Land Cover Analysis (after map)
+st.subheader("🏙️ Land Use / Land Cover Analysis")
+
+if land_use_layer_note:
+    pass
+
+if land_use_histogram and land_use_total_pixels:
+    land_class_names = {
+        '10': 'Tree Cover', '20': 'Shrubland', '30': 'Grassland',
+        '40': 'Cropland', '50': 'Built-up (Urban)', '60': 'Bare/Sparse Vegetation',
+        '70': 'Snow/Ice', '80': 'Water Bodies', '90': 'Wetland',
+        '95': 'Mangroves', '100': 'Moss/Lichen'
+    }
+    
+    st.markdown("### 📊 Land Use Distribution")
+    
+    # Create columns for land use stats
+    col1, col2, col3, col4 = st.columns(4, gap="small")
+    
+    # Calculate percentages
+    land_use_pct = {
+        land_class_names.get(k, k): (v / land_use_total_pixels) * 100
+        for k, v in land_use_histogram.items()
+    }
+    
+    # Sort by percentage
+    sorted_land_use = sorted(land_use_pct.items(), key=lambda x: x[1], reverse=True)
+    
+    # Display top land uses in metrics
+    for idx, (land_type, percentage) in enumerate(sorted_land_use[:4]):
+        with [col1, col2, col3, col4][idx]:
+            st.metric(land_type, f"{percentage:.1f}%")
+    
+    # Show all land uses in a table
+    if len(sorted_land_use) > 4:
+        df_land_use = pd.DataFrame(sorted_land_use, columns=['Land Use Type', 'Coverage (%)'])
+        df_land_use['Coverage (%)'] = df_land_use['Coverage (%)'].round(2)
+        st.dataframe(df_land_use, width='stretch', hide_index=True)
+
+# Time Series Analysis of Landsat 8 LST
+st.subheader("Time Series Analysis - Historical Landsat 8 Land Surface Temperature")
 
 # Date range selector
 col1, col2 = st.columns([1, 1], gap="medium")
@@ -810,29 +1193,52 @@ with col2:
     end_date = st.date_input("End Date", datetime.now())
 
 try:
-    # Fetch MODIS data for the selected date range
-    modis_collection = (
-        ee.ImageCollection("MODIS/061/MOD11A1")
-        .filterDate(start_date.isoformat(), end_date.isoformat())
-        .select("LST_Day_1km")
-    )
+    # Fetch Landsat 8 data for the selected date range
+    modis_collection = get_landsat8_collection(
+        start_date.isoformat(),
+        end_date.isoformat(),
+        region
+    ).select("LST")
+    worldcover_ts = ee.ImageCollection("ESA/WorldCover/v200").first().select("Map").rename("LandCover")
+
+    land_cover_name_map = {
+        "10": "Tree Cover",
+        "20": "Shrubland",
+        "30": "Grassland",
+        "40": "Cropland",
+        "50": "Built-up (Urban)",
+        "60": "Bare/Sparse Vegetation",
+        "70": "Snow/Ice",
+        "80": "Water Bodies",
+        "90": "Wetland",
+        "95": "Mangroves",
+        "100": "Moss/Lichen",
+    }
     
     # Extract time series data for the region
     def extract_lst_stats(image):
         date = ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')
-        lst_celsius = image.multiply(0.02).subtract(273.15)
+        lst_celsius = image
         
         # Calculate mean LST for the region
         mean_lst = lst_celsius.reduceRegion(
             reducer=ee.Reducer.mean(),
             geometry=region,
-            scale=1000,
+            scale=100,
             maxPixels=1e9
-        ).get('LST_Day_1km')
+        ).get('LST')
+
+        grouped_stats = lst_celsius.addBands(worldcover_ts).reduceRegion(
+            reducer=ee.Reducer.mean().group(groupField=1, groupName='landcover'),
+            geometry=region,
+            scale=100,
+            maxPixels=1e9
+        ).get('groups')
         
         return ee.Feature(None, {
             'date': date,
-            'mean_lst': mean_lst
+            'mean_lst': mean_lst,
+            'landcover_groups': grouped_stats
         })
     
     # Map the function over the collection
@@ -844,6 +1250,7 @@ try:
     # Create DataFrame
     dates = []
     temps = []
+    lulc_ts_rows = []
     
     for feature in ts_list:
         if feature and 'properties' in feature:
@@ -851,6 +1258,18 @@ try:
             if props.get('mean_lst') is not None:
                 dates.append(props['date'])
                 temps.append(float(props['mean_lst']))
+
+            for group_item in props.get('landcover_groups', []) or []:
+                lc_code_raw = group_item.get('landcover')
+                lc_mean = group_item.get('mean')
+                if lc_code_raw is None or lc_mean is None:
+                    continue
+                lc_code = str(int(lc_code_raw))
+                lulc_ts_rows.append({
+                    'Date': pd.to_datetime(props['date']),
+                    'Land Cover': land_cover_name_map.get(lc_code, f'Class {lc_code}'),
+                    'Mean LST (°C)': float(lc_mean),
+                })
     
     if dates:
         df_ts = pd.DataFrame({
@@ -871,7 +1290,7 @@ try:
         ))
         
         fig.update_layout(
-            title='MODIS Land Surface Temperature Time Series (Delhi-NCR Region)',
+            title='Landsat 8 Land Surface Temperature Time Series (Delhi Region)',
             xaxis_title='Date',
             yaxis_title='Temperature (°C)',
             hovermode='x unified',
@@ -880,6 +1299,74 @@ try:
         )
         
         st.plotly_chart(fig, width='stretch')
+
+        if lulc_ts_rows:
+            import numpy as np
+
+            df_lulc_ts = pd.DataFrame(lulc_ts_rows)
+            df_lulc_ts = df_lulc_ts.sort_values(['Land Cover', 'Date'])
+
+            fig_lulc = go.Figure()
+            palette = [
+                '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+                '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+                '#393b79', '#637939'
+            ]
+            lc_names = sorted(df_lulc_ts['Land Cover'].unique())
+            for idx, lc_name in enumerate(lc_names):
+                df_lc = df_lulc_ts[df_lulc_ts['Land Cover'] == lc_name]
+                line_color = palette[idx % len(palette)]
+                fig_lulc.add_trace(go.Scatter(
+                    x=df_lc['Date'],
+                    y=df_lc['Mean LST (°C)'],
+                    mode='lines+markers',
+                    name=lc_name,
+                    marker=dict(size=5),
+                    line=dict(width=2, color=line_color),
+                    legendgroup=lc_name
+                ))
+
+            # Single overall trend line across all land-cover time-series points.
+            if len(df_lulc_ts) >= 2:
+                df_trend = df_lulc_ts.sort_values('Date')
+                x_ord_all = df_trend['Date'].map(lambda d: d.toordinal()).to_numpy()
+                y_all = df_trend['Mean LST (°C)'].to_numpy()
+                trend_coeff_all = np.polyfit(x_ord_all, y_all, 1)
+                trend_fn_all = np.poly1d(trend_coeff_all)
+
+                # High-contrast halo so the trend remains visible in light and dark themes.
+                fig_lulc.add_trace(go.Scatter(
+                    x=df_trend['Date'],
+                    y=trend_fn_all(x_ord_all),
+                    mode='lines',
+                    name='Overall trend',
+                    line=dict(width=6, dash='dash', color='white'),
+                    opacity=0.95,
+                    showlegend=False,
+                    hoverinfo='skip'
+                ))
+
+                fig_lulc.add_trace(go.Scatter(
+                    x=df_trend['Date'],
+                    y=trend_fn_all(x_ord_all),
+                    mode='lines',
+                    name='Overall trend',
+                    line=dict(width=2.5, dash='dash', color='#111111'),
+                    opacity=1.0,
+                    showlegend=True
+                ))
+
+            fig_lulc.update_layout(
+                title='LST Time Series by Land Cover Type with Trend Lines (ESA WorldCover)',
+                xaxis_title='Date',
+                yaxis_title='Temperature (°C)',
+                hovermode='x unified',
+                height=460,
+                template='plotly_white',
+                legend_title='Land Cover Type'
+            )
+
+            st.plotly_chart(fig_lulc, width='stretch')
         
         # Display statistics
         col1, col2, col3, col4 = st.columns(4, gap="small")
@@ -892,24 +1379,27 @@ try:
         with col4:
             st.metric("Data Points", len(df_ts))
     else:
-        st.warning("No MODIS data available for the selected date range.")
+        st.warning("No Landsat 8 data available for the selected date range.")
         
 except Exception as e:
     st.error(f"Error fetching time series data: {str(e)}")
 
 # Spatial Distribution Analysis
-st.subheader("Spatial Distribution Analysis - Temperature Variation Across Districts")
+st.subheader("Spatial Distribution Analysis - Air Temperature vs LST (Historical)")
 
 try:
-    # Fetch current weather for all districts
+    lst_image = landsat_collection.select("LST").median()
     district_temps = []
     for name, lat, lon in locations:
-        w = get_weather(lat, lon)
+        air_temp = get_power_air_temp(lat, lon, modis_start_date, modis_end_date)
+        lst_value = get_lst_at_point(lst_image, lon, lat)
+        if air_temp is None:
+            w = get_weather(lat, lon)
+            air_temp = w["temperature"]
         district_temps.append({
             'District': name,
-            'Temperature': w['temperature'],
-            'Feels Like': w['feels_like'],
-            'Humidity': w['humidity'],
+            'Air Temperature': air_temp,
+            'LST': lst_value,
             'Latitude': lat,
             'Longitude': lon
         })
@@ -919,27 +1409,27 @@ try:
     # Create visualizations
     col1, col2 = st.columns([1, 1], gap="medium")
     
-    # Spatial heatmap - Bar chart showing temperature distribution
+    # Spatial heatmap - Bar chart showing air temperature distribution
     with col1:
         fig_bar = go.Figure()
         fig_bar.add_trace(go.Bar(
             x=df_spatial['District'],
-            y=df_spatial['Temperature'],
+            y=df_spatial['Air Temperature'],
             marker=dict(
-                color=df_spatial['Temperature'],
+                color=df_spatial['Air Temperature'],
                 colorscale='RdYlBu_r',
-                colorbar=dict(title="Temp (°C)"),
+                colorbar=dict(title="Air Temp (°C)"),
                 showscale=True
             ),
-            text=df_spatial['Temperature'].round(2),
+            text=df_spatial['Air Temperature'].round(2),
             textposition='outside',
-            name='Temperature'
+            name='Air Temperature'
         ))
         
         fig_bar.update_layout(
-            title='Current Temperature Distribution Across Districts',
+            title='Historical Air Temperature Distribution Across Districts',
             xaxis_title='District',
-            yaxis_title='Temperature (°C)',
+            yaxis_title='Air Temperature (°C)',
             height=400,
             template='plotly_white',
             showlegend=False
@@ -947,19 +1437,19 @@ try:
         
         st.plotly_chart(fig_bar, width='stretch')
     
-    # Scatter plot - showing temperature vs feels like
+    # Scatter plot - air temperature vs LST
     with col2:
         fig_scatter = go.Figure()
         fig_scatter.add_trace(go.Scatter(
-            x=df_spatial['Temperature'],
-            y=df_spatial['Feels Like'],
+            x=df_spatial['Air Temperature'],
+            y=df_spatial['LST'],
             mode='markers+text',
             marker=dict(
                 size=15,
-                color=df_spatial['Temperature'],
+                color=df_spatial['Air Temperature'],
                 colorscale='RdYlBu_r',
                 showscale=True,
-                colorbar=dict(title="Temp (°C)")
+                colorbar=dict(title="Air Temp (°C)")
             ),
             text=df_spatial['District'],
             textposition='top center',
@@ -967,9 +1457,9 @@ try:
         ))
         
         fig_scatter.update_layout(
-            title='Temperature vs Feels Like Temperature',
-            xaxis_title='Actual Temperature (°C)',
-            yaxis_title='Feels Like Temperature (°C)',
+            title='Air Temperature vs LST',
+            xaxis_title='Air Temperature (°C)',
+            yaxis_title='Land Surface Temperature (°C)',
             height=400,
             template='plotly_white'
         )
@@ -981,36 +1471,35 @@ try:
     
     col1, col2, col3, col4, col5 = st.columns(5, gap="small")
     with col1:
-        st.metric("Max Temp District", df_spatial.loc[df_spatial['Temperature'].idxmax(), 'District'], 
-                 f"{df_spatial['Temperature'].max():.1f}°C")
+        st.metric("Max Air Temp District", df_spatial.loc[df_spatial['Air Temperature'].idxmax(), 'District'], 
+                 f"{df_spatial['Air Temperature'].max():.1f}°C")
     with col2:
-        st.metric("Min Temp District", df_spatial.loc[df_spatial['Temperature'].idxmin(), 'District'],
-                 f"{df_spatial['Temperature'].min():.1f}°C")
+        st.metric("Min Air Temp District", df_spatial.loc[df_spatial['Air Temperature'].idxmin(), 'District'],
+                 f"{df_spatial['Air Temperature'].min():.1f}°C")
     with col3:
-        temp_range = df_spatial['Temperature'].max() - df_spatial['Temperature'].min()
-        st.metric("Temperature Range", f"{temp_range:.1f}°C", 
+        temp_range = df_spatial['Air Temperature'].max() - df_spatial['Air Temperature'].min()
+        st.metric("Air Temp Range", f"{temp_range:.1f}°C", 
                  f"(Spatial Variation)")
     with col4:
-        st.metric("Avg Temperature", f"{df_spatial['Temperature'].mean():.1f}°C",
+        st.metric("Avg Air Temp", f"{df_spatial['Air Temperature'].mean():.1f}°C",
                  f"(All Districts)")
     with col5:
-        st.metric("Avg Humidity", f"{df_spatial['Humidity'].mean():.0f}%",
-                 f"(All Districts)")
+        lst_mean = df_spatial['LST'].mean()
+        st.metric("Avg LST", f"{lst_mean:.1f}°C" if pd.notna(lst_mean) else "N/A")
     
     # Detailed district comparison table
     st.subheader("Detailed District Comparison")
     
-    df_display = df_spatial[['District', 'Temperature', 'Feels Like', 'Humidity']].copy()
-    df_display['Temp Anomaly'] = df_display['Temperature'] - df_display['Temperature'].mean()
-    df_display['Temperature'] = df_display['Temperature'].round(2)
-    df_display['Feels Like'] = df_display['Feels Like'].round(2)
-    df_display['Humidity'] = df_display['Humidity'].round(0).astype(int)
-    df_display['Temp Anomaly'] = df_display['Temp Anomaly'].round(2)
+    df_display = df_spatial[['District', 'Air Temperature', 'LST']].copy()
+    df_display['Air Temp Anomaly'] = df_display['Air Temperature'] - df_display['Air Temperature'].mean()
+    df_display['Air Temperature'] = df_display['Air Temperature'].round(2)
+    df_display['LST'] = df_display['LST'].round(2)
+    df_display['Air Temp Anomaly'] = df_display['Air Temp Anomaly'].round(2)
     
     st.dataframe(df_display, width='stretch')
     
     # Heat gradient map visualization
-    st.subheader("Heat Distribution Map")
+    st.subheader("Air Temperature Distribution Map")
     
     # Create map with temperature-based colors
     m_heat = folium.Map(location=[28.6139, 77.2090], zoom_start=10)
@@ -1018,7 +1507,7 @@ try:
     # Add districts with color intensity based on temperature
     for idx, row in df_spatial.iterrows():
         # Normalize temperature to 0-1 for color mapping
-        temp_normalized = (row['Temperature'] - df_spatial['Temperature'].min()) / (df_spatial['Temperature'].max() - df_spatial['Temperature'].min())
+        temp_normalized = (row['Air Temperature'] - df_spatial['Air Temperature'].min()) / (df_spatial['Air Temperature'].max() - df_spatial['Air Temperature'].min())
         
         # Color mapping: blue (cold) to red (hot)
         if temp_normalized < 0.33:
@@ -1030,10 +1519,9 @@ try:
         
         popup_text = f"""
 <b>{row['District']}</b><br>
-Temperature: {row['Temperature']:.1f}°C<br>
-Feels Like: {row['Feels Like']:.1f}°C<br>
-Humidity: {row['Humidity']:.0f}%<br>
-Anomaly: {row['Temperature'] - df_spatial['Temperature'].mean():+.2f}°C
+Air Temperature: {row['Air Temperature']:.1f}°C<br>
+LST: {row['LST']:.1f}°C<br>
+Anomaly: {row['Air Temperature'] - df_spatial['Air Temperature'].mean():+.2f}°C
 """
         
         folium.CircleMarker(
@@ -1050,12 +1538,12 @@ Anomaly: {row['Temperature'] - df_spatial['Temperature'].mean():+.2f}°C
     
     st_folium(m_heat, width=None, height=600, returned_objects=[])
     
-    # Urban Heat Island Analysis
-    st.subheader("Urban Heat Island (UHI) Analysis")
+    # Urban Heat Island Analysis (Air)
+    st.subheader("Urban Heat Island (UHI) Analysis - Air Temperature")
     
-    mean_temp = df_spatial['Temperature'].mean()
+    mean_temp = df_spatial['Air Temperature'].mean()
     df_uhi = df_spatial.copy()
-    df_uhi['UHI Intensity'] = df_uhi['Temperature'] - mean_temp
+    df_uhi['UHI Intensity'] = df_uhi['Air Temperature'] - mean_temp
     
     # Create UHI intensity chart
     fig_uhi = go.Figure()
@@ -1071,9 +1559,9 @@ Anomaly: {row['Temperature'] - df_spatial['Temperature'].mean():+.2f}°C
     ))
     
     fig_uhi.update_layout(
-        title='Urban Heat Island Intensity (Deviation from Mean)',
+        title='Air UHI Intensity (Deviation from Mean)',
         xaxis_title='District',
-        yaxis_title='Temperature Anomaly (°C)',
+        yaxis_title='Air Temperature Anomaly (°C)',
         height=400,
         template='plotly_white',
         hovermode='x unified',
@@ -1091,16 +1579,66 @@ Anomaly: {row['Temperature'] - df_spatial['Temperature'].mean():+.2f}°C
     col1, col2 = st.columns([1, 1], gap="medium")
     with col1:
         st.info(f"""
-        **Hottest Zone**: {hottest_district['District']}
+        **Hottest Zone (Air)**: {hottest_district['District']}
         - Temperature Anomaly: +{hottest_district['UHI Intensity']:.2f}°C (above mean)
-        - Actual Temperature: {hottest_district['Temperature']:.1f}°C
+        - Air Temperature: {hottest_district['Air Temperature']:.1f}°C
         """)
     with col2:
         st.info(f"""
-        **Coolest Zone**: {coolest_district['District']}
+        **Coolest Zone (Air)**: {coolest_district['District']}
         - Temperature Anomaly: {coolest_district['UHI Intensity']:.2f}°C (below mean)
-        - Actual Temperature: {coolest_district['Temperature']:.1f}°C
+        - Air Temperature: {coolest_district['Air Temperature']:.1f}°C
         """)
+
+    if df_spatial['LST'].notna().any():
+        st.subheader("Surface Urban Heat Island (LST) Analysis")
+        cropland_mean_lst = None
+        try:
+            worldcover = ee.ImageCollection("ESA/WorldCover/v200").first()
+            cropland_mask = worldcover.select("Map").eq(40)
+            cropland_lst = lst_image.updateMask(cropland_mask)
+            cropland_stats = cropland_lst.reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=districts_geometry if districts_geometry else region,
+                scale=100,
+                maxPixels=1e9
+            ).getInfo()
+            cropland_mean_lst = cropland_stats.get("LST")
+        except Exception:
+            cropland_mean_lst = None
+
+        if cropland_mean_lst is None:
+            cropland_mean_lst = df_spatial['LST'].mean()
+            st.info("Cropland baseline unavailable; using Delhi mean LST.")
+        else:
+            st.info(f"Cropland baseline LST (WorldCover class 40): {cropland_mean_lst:.2f}°C")
+        df_uhi_lst = df_spatial.copy()
+        df_uhi_lst['UHI Intensity (LST)'] = df_uhi_lst['LST'] - cropland_mean_lst
+
+        fig_uhi_lst = go.Figure()
+        colors_lst = ['red' if x > 0 else 'blue' for x in df_uhi_lst['UHI Intensity (LST)']]
+
+        fig_uhi_lst.add_trace(go.Bar(
+            x=df_uhi_lst['District'],
+            y=df_uhi_lst['UHI Intensity (LST)'],
+            marker=dict(color=colors_lst),
+            text=df_uhi_lst['UHI Intensity (LST)'].round(2),
+            textposition='outside',
+            name='UHI Intensity (LST)'
+        ))
+
+        fig_uhi_lst.update_layout(
+            title='Surface UHI Intensity from LST (vs Cropland Baseline)',
+            xaxis_title='District',
+            yaxis_title='LST Anomaly (°C)',
+            height=400,
+            template='plotly_white',
+            hovermode='x unified',
+            showlegend=False
+        )
+
+        fig_uhi_lst.add_hline(y=0, line_dash="dash", line_color="gray")
+        st.plotly_chart(fig_uhi_lst, width='stretch')
 
 except Exception as e:
     st.error(f"Error in spatial distribution analysis: {str(e)}")
@@ -1134,14 +1672,14 @@ try:
             ndvi_values.append({
                 'City': name,
                 'NDVI': ndvi_sample if ndvi_sample else 0,
-                'Temperature': next((item['Temperature'] for item in district_temps if item['District'] == name), None)
+                'Temperature': next((item['Air Temperature'] for item in district_temps if item['District'] == name), None)
             })
         except:
             # If sampling fails, use default NDVI
             ndvi_values.append({
                 'City': name,
                 'NDVI': 0.3,  # Default moderate vegetation
-                'Temperature': next((item['Temperature'] for item in district_temps if item['District'] == name), None)
+                'Temperature': next((item['Air Temperature'] for item in district_temps if item['District'] == name), None)
             })
     
     df_greenery = pd.DataFrame(ndvi_values)
@@ -1226,7 +1764,7 @@ with col_date1:
         value=datetime(2025, 12, 31).date(),
         min_value=datetime(2000, 1, 1).date(),
         max_value=datetime.now().date(),
-        help="Select start date for correlation analysis (MODIS data available from 2000)"
+        help="Select start date for correlation analysis (Landsat 8 data available from 2013)"
     )
 
 with col_date2:
@@ -1243,8 +1781,6 @@ if corr_start_date >= corr_end_date:
     st.error("⚠️ Start date must be before end date!")
     st.stop()
 
-st.info(f"📊 Analyzing data from **{corr_start_date}** to **{corr_end_date}** ({(corr_end_date - corr_start_date).days} days)")
-
 try:
     # Sample data from Delhi districts using Earth Engine
     import pandas as pd
@@ -1256,54 +1792,45 @@ try:
     else:
         sampling_geometry = region
     
-    # Get LST data using selected date range
-    lst_image = (
-        ee.ImageCollection("MODIS/061/MOD11A1")
-        .filterDate(corr_start_date.isoformat(), corr_end_date.isoformat())
-        .select("LST_Day_1km")
-        .mean()
+    # Get LST and NDVI using selected date range
+    landsat_corr_collection = get_landsat8_collection(
+        corr_start_date.isoformat(),
+        corr_end_date.isoformat(),
+        sampling_geometry
     )
-    lst_celsius_sample = lst_image.multiply(0.02).subtract(273.15)
-    
-    # Get NDVI data using selected date range
-    ndvi_image = (
-        ee.ImageCollection("MODIS/061/MOD13A2")
-        .filterDate(corr_start_date.isoformat(), corr_end_date.isoformat())
-        .select("NDVI")
-        .mean()
-    ).divide(10000)
+    lst_celsius_sample = landsat_corr_collection.select("LST").median()
+    ndvi_image = landsat_corr_collection.select("NDVI").median()
     
     # Get Land Cover data
     lulc_image = ee.ImageCollection("ESA/WorldCover/v200").first()
     
     # Combine all bands
     combined_image = lst_celsius_sample.addBands(ndvi_image).addBands(lulc_image)
-    combined_image = combined_image.select(['LST_Day_1km', 'NDVI', 'Map'], ['LST', 'NDVI', 'LandCover'])
+    combined_image = combined_image.select(['LST', 'NDVI', 'Map'], ['LST', 'NDVI', 'LandCover'])
     
     # Sample random points
-    with st.spinner("Sampling data across Delhi districts..."):
-        sample_points = combined_image.sample(
-            region=sampling_geometry,
-            scale=500,  # 500m resolution
-            numPixels=500,  # Sample 500 points
-            seed=42,
-            geometries=True
-        )
-        
-        # Get the data
-        sample_data = sample_points.getInfo()
-        
-        if sample_data and 'features' in sample_data and len(sample_data['features']) > 0:
-            # Extract data into DataFrame
-            data_list = []
-            for feature in sample_data['features']:
-                props = feature['properties']
-                if 'LST' in props and 'NDVI' in props and 'LandCover' in props:
-                    data_list.append({
-                        'LST': props['LST'],
-                        'NDVI': props['NDVI'],
-                        'LandCover': props['LandCover']
-                    })
+    sample_points = combined_image.sample(
+        region=sampling_geometry,
+        scale=100,  # 100m resolution
+        numPixels=500,  # Sample 500 points
+        seed=42,
+        geometries=True
+    )
+
+    # Get the data
+    sample_data = sample_points.getInfo()
+
+    if sample_data and 'features' in sample_data and len(sample_data['features']) > 0:
+        # Extract data into DataFrame
+        data_list = []
+        for feature in sample_data['features']:
+            props = feature['properties']
+            if 'LST' in props and 'NDVI' in props and 'LandCover' in props:
+                data_list.append({
+                    'LST': props['LST'],
+                    'NDVI': props['NDVI'],
+                    'LandCover': props['LandCover']
+                })
             
             df_corr = pd.DataFrame(data_list)
             
@@ -1320,8 +1847,6 @@ try:
             df_corr['LandCover_Name'] = df_corr['LandCover'].map(lulc_names).fillna('Other')
             
             if len(df_corr) > 10:  # Need sufficient data points
-                st.success(f"✅ Sampled {len(df_corr)} points across Delhi districts")
-                
                 # Calculate correlations
                 corr_ndvi_lst = df_corr['NDVI'].corr(df_corr['LST'])
                 
@@ -1653,13 +2178,12 @@ try:
             
 except Exception as corr_error:
     st.error(f"Error in correlation analysis: {str(corr_error)}")
-    st.info("This analysis requires Earth Engine data. Make sure your date range has available data.")
 
 # ==================== End of Correlation Analysis ====================
 
-st.subheader("Live Heat Alerts for Delhi-NCR Region")
+st.subheader("Live Heat Alerts for Delhi Region")
 for name, lat, lon in locations:
     w = get_weather(lat, lon)
     st.write(f"**{name}**: {w['temperature']} °C, Feels Like: {w['feels_like']} °C, Humidity: {w['humidity']} %")
 
-st.caption("Satellite Data Source: MODIS LST | Weather Data Source: OpenWeather API")
+st.caption("Satellite Data Source: Landsat 8 L2 (LST & NDVI, 100m) | Weather Data Sources: OpenWeather (live) + NASA POWER (historical)")
