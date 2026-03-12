@@ -14,12 +14,26 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+
+      - name: Validate required secrets
+        env:
+          GEE_SERVICE_ACCOUNT: ${{ secrets.GEE_SERVICE_ACCOUNT }}
+          GEE_PRIVATE_KEY: ${{ secrets.GEE_PRIVATE_KEY }}
+        run: |
+          if [ -z "$GEE_SERVICE_ACCOUNT" ]; then
+            echo "Missing secret: GEE_SERVICE_ACCOUNT"
+            exit 1
+          fi
+          if [ -z "$GEE_PRIVATE_KEY" ]; then
+            echo "Missing secret: GEE_PRIVATE_KEY"
+            exit 1
+          fi
 
       - name: Install dependencies
         run: |

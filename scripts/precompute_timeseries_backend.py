@@ -23,8 +23,16 @@ def load_delhi_geometry_from_geojson(path: str) -> ee.Geometry:
 
 
 def init_ee() -> None:
-    service_account_email = os.environ["GEE_SERVICE_ACCOUNT"]
-    private_key = os.environ["GEE_PRIVATE_KEY"]
+    service_account_email = os.environ.get("GEE_SERVICE_ACCOUNT", "").strip()
+    private_key = os.environ.get("GEE_PRIVATE_KEY", "").strip()
+
+    if not service_account_email:
+        raise RuntimeError("Missing required env var: GEE_SERVICE_ACCOUNT")
+    if not private_key:
+        raise RuntimeError("Missing required env var: GEE_PRIVATE_KEY")
+
+    # Support both literal '\\n' and real newlines from secret stores.
+    private_key = private_key.replace("\\n", "\n")
 
     service_account_info = {
         "type": "service_account",
@@ -86,32 +94,32 @@ def main() -> None:
 
     collection = get_landsat8_collection(start_dt.isoformat(), end_dt.isoformat(), region)
 
-    time_starts = collection.aggregate_array("system:time_start").getInfo() or []
-    cloud_covers = collection.aggregate_array("CLOUD_COVER").getInfo() or []
-    product_ids = collection.aggregate_array("LANDSAT_PRODUCT_ID").getInfo() or []
-    system_indexes = collection.aggregate_array("system:index").getInfo() or []
+    # Compute mean LST once per image on the server, then aggregate arrays in bulk.
+    def add_scene_mean_lst(image: ee.Image) -> ee.Image:
+        mean_lst = image.reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=region,
+            scale=250,
+            maxPixels=1e9,
+            bestEffort=True,
+            tileScale=4,
+        ).get("LST")
+        return image.set("mean_lst_c", mean_lst)
+
+    enriched = collection.map(add_scene_mean_lst)
+
+    time_starts = enriched.aggregate_array("system:time_start").getInfo() or []
+    cloud_covers = enriched.aggregate_array("CLOUD_COVER").getInfo() or []
+    product_ids = enriched.aggregate_array("LANDSAT_PRODUCT_ID").getInfo() or []
+    system_indexes = enriched.aggregate_array("system:index").getInfo() or []
+    mean_lsts = enriched.aggregate_array("mean_lst_c").getInfo() or []
 
     count = len(time_starts)
-    images = collection.toList(count)
 
     records = []
     for i in range(count):
         ts = time_starts[i]
         dt = datetime.utcfromtimestamp(ts / 1000)
-        img = ee.Image(images.get(i))
-
-        mean_lst = (
-            img.reduceRegion(
-                reducer=ee.Reducer.mean(),
-                geometry=region,
-                scale=250,
-                maxPixels=1e9,
-                bestEffort=True,
-                tileScale=4,
-            )
-            .get("LST")
-            .getInfo()
-        )
 
         records.append(
             {
@@ -119,7 +127,7 @@ def main() -> None:
                 "time_utc": dt.strftime("%H:%M"),
                 "scene_id": product_ids[i] or system_indexes[i] or "Unknown",
                 "cloud_cover": cloud_covers[i],
-                "mean_lst_c": mean_lst,
+                "mean_lst_c": mean_lsts[i] if i < len(mean_lsts) else None,
             }
         )
 
