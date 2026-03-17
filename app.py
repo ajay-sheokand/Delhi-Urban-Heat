@@ -425,6 +425,7 @@ def get_available_landsat_scenes(_collection):
         scenes.append({
             "date": scene_date,
             "datetime": scene_dt,
+            "time_start_ms": int(ms),
             "cloud_cover": cloud_value,
             "scene_id": scene_id,
             "label": label,
@@ -456,20 +457,6 @@ if map_mode == "Scene selection (single scene)":
             index=len(scene_labels) - 1,
         )
 
-        scene_pane_df = pd.DataFrame(
-            [
-                {
-                    "Date": scene["date"].isoformat(),
-                    "Time (UTC)": scene["datetime"].strftime("%H:%M"),
-                    "Satellite Data": "Landsat 8 L2",
-                    "Scene ID": scene["scene_id"],
-                    "Cloud Cover (%)": "N/A" if scene["cloud_cover"] is None else round(scene["cloud_cover"], 1),
-                }
-                for scene in available_scenes
-            ]
-        )
-        st.dataframe(scene_pane_df, width='stretch', hide_index=True)
-
         selected_scene = next(scene for scene in available_scenes if scene["label"] == selected_label)
         selected_cloud_text = "N/A" if selected_scene["cloud_cover"] is None else f"{selected_scene['cloud_cover']:.1f}%"
         st.caption(
@@ -478,9 +465,14 @@ if map_mode == "Scene selection (single scene)":
             f"Cloud cover: {selected_cloud_text}"
         )
         map_date = selected_scene["date"]
+        # Primary match by system time: most reliable after cloud-mask and band-map transforms.
         scene_collection = landsat_collection.filter(
-            ee.Filter.eq("LANDSAT_PRODUCT_ID", selected_scene["scene_id"])
+            ee.Filter.eq("system:time_start", selected_scene["time_start_ms"])
         )
+        if scene_collection.size().getInfo() == 0:
+            scene_collection = landsat_collection.filter(
+                ee.Filter.eq("LANDSAT_PRODUCT_ID", selected_scene["scene_id"])
+            )
         if scene_collection.size().getInfo() == 0:
             scene_collection = landsat_collection.filter(
                 ee.Filter.eq("system:index", selected_scene["scene_id"])
@@ -1357,11 +1349,6 @@ try:
         with inv_col2:
             st.metric("Available Data Points", ts_inventory["count"])
 
-        with st.expander("View Available Scenes", expanded=False):
-            if ts_inventory["rows"]:
-                st.dataframe(pd.DataFrame(ts_inventory["rows"]), width='stretch', hide_index=True)
-            else:
-                st.caption("No scenes available for the selected date range.")
     except Exception:
         st.caption("Could not fetch full scene inventory for this date range.")
 
