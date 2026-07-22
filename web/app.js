@@ -215,9 +215,13 @@ async function loadWeather() {
             1
         )}°C)<br/>Humidity: ${d.humidity}%<br/>${d.heat_alert_label}`;
 
-        const marker = new maplibregl.Marker({ color: alertColor(d.heat_alert_level) })
+        const el = document.createElement("div");
+        el.className = "weather-marker";
+        el.style.backgroundColor = alertColor(d.heat_alert_level);
+
+        const marker = new maplibregl.Marker({ element: el })
             .setLngLat([d.lon, d.lat])
-            .setPopup(new maplibregl.Popup({ offset: 12 }).setHTML(popupHtml));
+            .setPopup(new maplibregl.Popup({ offset: 14 }).setHTML(popupHtml));
 
         if (showMarkers) marker.addTo(map);
         return marker;
