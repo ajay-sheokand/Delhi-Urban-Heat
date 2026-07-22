@@ -3,24 +3,37 @@ import os
 from datetime import datetime, timedelta
 
 import ee
+import geopandas as gpd
 import requests
 from google.oauth2 import service_account
+from shapely.validation import make_valid
+
+
+def shapely_geom_to_ee(geom) -> ee.Geometry:
+    """Exterior-ring-only conversion (no holes) — same simplification app.py's
+    own get_districts_ee_geometry() already makes for this same dataset."""
+    if geom.geom_type == "Polygon":
+        coords = [[pt[0], pt[1]] for pt in geom.exterior.coords]
+        return ee.Geometry.Polygon([coords])
+    if geom.geom_type == "MultiPolygon":
+        polygons = [[[list(pt[:2]) for pt in poly.exterior.coords]] for poly in geom.geoms]
+        return ee.Geometry.MultiPolygon(polygons)
+    raise ValueError(f"Unsupported geometry type: {geom.geom_type}")
+
+
+def repair_shapely_geometry(geom):
+    """Fix invalid ring winding/self-intersections (delhi_admin.geojson has
+    several) so EE's strict GeoJSON validator accepts it — mirrors app.py's
+    get_districts_ee_geometry(), which already solves this for the same file."""
+    fixed = make_valid(geom)
+    return fixed.simplify(0.0001, preserve_topology=True)
 
 
 def load_delhi_geometry_from_geojson(path: str) -> ee.Geometry:
-    with open(path, "r", encoding="utf-8") as f:
-        payload = json.load(f)
-
-    features = payload.get("features", [])
-    merged = None
-    for feature in features:
-        geom = ee.Geometry(feature.get("geometry"))
-        merged = geom if merged is None else merged.union(geom)
-
-    if merged is None:
-        # Fallback rectangle around Delhi
-        return ee.Geometry.Rectangle([76.8388, 28.4044, 77.3465, 28.8833])
-    return merged
+    gdf = gpd.read_file(path)
+    gdf["geometry"] = gdf["geometry"].apply(repair_shapely_geometry)
+    merged = repair_shapely_geometry(gdf.union_all())
+    return shapely_geom_to_ee(merged)
 
 
 def load_delhi_geometry_from_ee() -> ee.Geometry:
@@ -123,30 +136,29 @@ def load_region(workspace: str) -> ee.Geometry:
 def load_district_features(workspace: str) -> list:
     """Per-district (name, ee.Geometry) pairs from delhi_admin.geojson's 11 features.
 
-    A couple of these polygons have invalid ring winding (same defect class
-    load_region() already works around for the merged region) and make EE
-    throw "Invalid GeoJSON geometry" as soon as the geometry is touched. Since
-    that can happen before any per-district try/except downstream gets a
-    chance to run, validate here and fall back to a buffered point around the
-    district's known centroid (DISTRICT_LOCATIONS) so one bad polygon doesn't
-    take down the whole analytics dataset.
+    Uses the same shapely repair as load_delhi_geometry_from_geojson() so
+    these polygons are the exact same source geometry drawn as the district
+    boundary lines on the map — not a different fallback boundary — so
+    raster clipping and the vector overlay line up. A buffered point around
+    the district's known centroid (DISTRICT_LOCATIONS) is a last-resort
+    fallback if repair genuinely can't fix a given polygon.
     """
     geojson_path = os.path.join(workspace, "delhi_admin.geojson")
-    with open(geojson_path, "r", encoding="utf-8") as f:
-        payload = json.load(f)
+    gdf = gpd.read_file(geojson_path)
+    name_col = "District" if "District" in gdf.columns else "Name"
 
     districts = []
-    for feature in payload.get("features", []):
-        props = feature.get("properties", {}) or {}
-        name = (props.get("District") or props.get("Name") or "Unknown").title()
+    for _, row in gdf.iterrows():
+        name = str(row[name_col]).title() if name_col in row and row[name_col] else "Unknown"
 
         geom = None
         try:
-            candidate = ee.Geometry(feature.get("geometry"))
+            repaired = repair_shapely_geometry(row.geometry)
+            candidate = shapely_geom_to_ee(repaired)
             _ = candidate.area(1).getInfo()  # force server-side validation now
             geom = candidate
         except Exception as exc:
-            print(f"District polygon invalid for {name}, using buffered centroid fallback: {exc}")
+            print(f"District polygon invalid for {name} even after repair, using buffered centroid fallback: {exc}")
             loc = next((d for d in DISTRICT_LOCATIONS if d["name"] == name), None)
             if loc:
                 geom = ee.Geometry.Point([loc["lon"], loc["lat"]]).buffer(3000)
