@@ -120,6 +120,80 @@ def load_region(workspace: str) -> ee.Geometry:
         return ee.Geometry.Rectangle([76.8388, 28.4044, 77.3465, 28.8833])
 
 
+def load_district_features(workspace: str) -> list:
+    """Per-district (name, ee.Geometry) pairs from delhi_admin.geojson's 11 features."""
+    geojson_path = os.path.join(workspace, "delhi_admin.geojson")
+    with open(geojson_path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+
+    districts = []
+    for feature in payload.get("features", []):
+        props = feature.get("properties", {}) or {}
+        name = (props.get("District") or props.get("Name") or "Unknown").title()
+        geom = ee.Geometry(feature.get("geometry"))
+        districts.append((name, geom))
+    return districts
+
+
+# Same 11 district centroids used by the weather markers (names match
+# load_district_features()'s .title()-cased "District" property exactly).
+DISTRICT_LOCATIONS = [
+    {"name": "Central", "lat": 28.6422, "lon": 77.2183},
+    {"name": "East", "lat": 28.6261, "lon": 77.3006},
+    {"name": "New Delhi", "lat": 28.6107, "lon": 77.2193},
+    {"name": "North", "lat": 28.7043, "lon": 77.2074},
+    {"name": "North East", "lat": 28.7234, "lon": 77.2701},
+    {"name": "North West", "lat": 28.7717, "lon": 77.0986},
+    {"name": "Shahadra", "lat": 28.7100, "lon": 77.3150},
+    {"name": "South", "lat": 28.5032, "lon": 77.2332},
+    {"name": "South East", "lat": 28.5550, "lon": 77.2850},
+    {"name": "South West", "lat": 28.5732, "lon": 77.0396},
+    {"name": "West", "lat": 28.6564, "lon": 77.0709},
+]
+
+
+def get_power_air_temp(lat: float, lon: float, start_date, end_date):
+    start_str = start_date.strftime("%Y%m%d")
+    end_str = end_date.strftime("%Y%m%d")
+    url = (
+        "https://power.larc.nasa.gov/api/temporal/daily/point"
+        f"?parameters=T2M&start={start_str}&end={end_str}"
+        f"&latitude={lat}&longitude={lon}&community=RE&format=JSON"
+    )
+    response = requests.get(url, timeout=30)
+    if response.status_code != 200:
+        return None
+    payload = response.json()
+    values = payload.get("properties", {}).get("parameter", {}).get("T2M", {})
+    temps = [v for v in values.values() if v is not None and v > -900]
+    if not temps:
+        return None
+    return sum(temps) / len(temps)
+
+
+def pearson_correlation(xs: list, ys: list):
+    n = len(xs)
+    if n < 2:
+        return None
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    cov = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    var_x = sum((x - mean_x) ** 2 for x in xs)
+    var_y = sum((y - mean_y) ** 2 for y in ys)
+    denom = (var_x * var_y) ** 0.5
+    if denom == 0:
+        return None
+    return cov / denom
+
+
+def heat_alert(temp_c: float) -> dict:
+    if temp_c >= 40:
+        return {"level": "extreme", "label": "🔥 Extreme Heat Alert"}
+    if temp_c >= 35:
+        return {"level": "high", "label": "⚠️ High Heat Warning"}
+    return {"level": "normal", "label": "🌤️ Normal Temperature"}
+
+
 def build_timeseries_dataset(region: ee.Geometry) -> dict:
     days_back = int(os.environ.get("PRECOMPUTE_DAYS", "730"))
     end_dt = datetime.utcnow().date()
@@ -198,19 +272,21 @@ WORLDCOVER_CLASSES = [
     {"id": 95, "color": "#00CF75", "label": "Mangroves"},
     {"id": 100, "color": "#FAE6A0", "label": "Moss/Lichen"},
 ]
+WORLDCOVER_NAME_BY_ID = {c["id"]: c["label"] for c in WORLDCOVER_CLASSES}
 
 
-def build_map_layers_dataset(region: ee.Geometry) -> dict:
-    window_days = int(os.environ.get("MAP_COMPOSITE_DAYS", "45"))
-    end_dt = datetime.utcnow().date()
-    start_dt = end_dt - timedelta(days=window_days)
-
-    collection = get_landsat8_collection(start_dt.isoformat(), end_dt.isoformat(), region)
-    lst_image = collection.select("LST").median().clip(region)
-    ndvi_image = collection.select("NDVI").median().clip(region)
+def build_map_layers_dataset(
+    region: ee.Geometry,
+    lst_image: ee.Image,
+    ndvi_image: ee.Image,
+    start_dt,
+    end_dt,
+) -> dict:
+    lst_clipped = lst_image.clip(region)
+    ndvi_clipped = ndvi_image.clip(region)
 
     try:
-        lst_stats = lst_image.reduceRegion(
+        lst_stats = lst_clipped.reduceRegion(
             reducer=ee.Reducer.minMax(),
             geometry=region,
             scale=100,
@@ -228,10 +304,10 @@ def build_map_layers_dataset(region: ee.Geometry) -> dict:
         lst_min, lst_max = 10, 40
 
     lst_vis = {"min": lst_min, "max": lst_max, "palette": LST_PALETTE}
-    lst_mapid = lst_image.getMapId(lst_vis)
+    lst_mapid = lst_clipped.getMapId(lst_vis)
 
     ndvi_vis = {"min": -0.3, "max": 1, "palette": NDVI_PALETTE}
-    ndvi_mapid = ndvi_image.getMapId(ndvi_vis)
+    ndvi_mapid = ndvi_clipped.getMapId(ndvi_vis)
 
     worldcover = ee.ImageCollection("ESA/WorldCover/v200").first().clip(region)
     worldcover_vis = {"min": 10, "max": 100, "palette": WORLDCOVER_PALETTE}
@@ -281,28 +357,191 @@ def build_map_layers_dataset(region: ee.Geometry) -> dict:
     }
 
 
-# Same 11 district centroids used by the live weather markers in app.py.
-DISTRICT_LOCATIONS = [
-    {"name": "Central", "lat": 28.6422, "lon": 77.2183},
-    {"name": "East", "lat": 28.6261, "lon": 77.3006},
-    {"name": "New Delhi", "lat": 28.6107, "lon": 77.2193},
-    {"name": "North", "lat": 28.7043, "lon": 77.2074},
-    {"name": "North East", "lat": 28.7234, "lon": 77.2701},
-    {"name": "North West", "lat": 28.7717, "lon": 77.0986},
-    {"name": "Shahadra", "lat": 28.7100, "lon": 77.3150},
-    {"name": "South", "lat": 28.5032, "lon": 77.2332},
-    {"name": "South East", "lat": 28.5550, "lon": 77.2850},
-    {"name": "South West", "lat": 28.5732, "lon": 77.0396},
-    {"name": "West", "lat": 28.6564, "lon": 77.0709},
-]
+def build_district_analytics_dataset(
+    region: ee.Geometry,
+    district_features: list,
+    lst_image: ee.Image,
+    ndvi_image: ee.Image,
+    composite_collection: ee.ImageCollection,
+) -> dict:
+    air_temp_days = int(os.environ.get("ANALYTICS_AIR_TEMP_DAYS", "90"))
+    air_end_dt = datetime.utcnow().date()
+    air_start_dt = air_end_dt - timedelta(days=air_temp_days)
 
+    combined = lst_image.addBands(ndvi_image)
 
-def heat_alert(temp_c: float) -> dict:
-    if temp_c >= 40:
-        return {"level": "extreme", "label": "🔥 Extreme Heat Alert"}
-    if temp_c >= 35:
-        return {"level": "high", "label": "⚠️ High Heat Warning"}
-    return {"level": "normal", "label": "🌤️ Normal Temperature"}
+    district_rows = []
+    for name, geom in district_features:
+        loc = next((d for d in DISTRICT_LOCATIONS if d["name"] == name), None)
+        lat = loc["lat"] if loc else None
+        lon = loc["lon"] if loc else None
+
+        mean_lst = None
+        mean_ndvi = None
+        try:
+            stats = combined.reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=geom,
+                scale=100,
+                maxPixels=1e9,
+                bestEffort=True,
+                tileScale=4,
+            ).getInfo()
+            mean_lst = stats.get("LST")
+            mean_ndvi = stats.get("NDVI")
+        except Exception as exc:
+            print(f"District LST/NDVI stats failed for {name}: {exc}")
+
+        air_temp = None
+        if lat is not None and lon is not None:
+            try:
+                air_temp = get_power_air_temp(lat, lon, air_start_dt, air_end_dt)
+            except Exception as exc:
+                print(f"NASA POWER fetch failed for {name}: {exc}")
+
+        district_rows.append(
+            {
+                "name": name,
+                "lat": lat,
+                "lon": lon,
+                "mean_lst_c": mean_lst,
+                "mean_ndvi": mean_ndvi,
+                "air_temp_c": air_temp,
+            }
+        )
+
+    valid_air_temps = [d["air_temp_c"] for d in district_rows if d["air_temp_c"] is not None]
+    citywide_air_temp = sum(valid_air_temps) / len(valid_air_temps) if valid_air_temps else None
+
+    cropland_baseline_lst = None
+    try:
+        worldcover = ee.ImageCollection("ESA/WorldCover/v200").first()
+        cropland_lst = lst_image.updateMask(worldcover.select("Map").eq(40))
+        cropland_stats = cropland_lst.reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=region,
+            scale=100,
+            maxPixels=1e9,
+            bestEffort=True,
+            tileScale=4,
+        ).getInfo()
+        cropland_baseline_lst = cropland_stats.get("LST")
+    except Exception as exc:
+        print(f"Cropland baseline LST failed: {exc}")
+
+    for d in district_rows:
+        d["uhi_air_c"] = (
+            d["air_temp_c"] - citywide_air_temp
+            if d["air_temp_c"] is not None and citywide_air_temp is not None
+            else None
+        )
+        d["uhi_surface_c"] = (
+            d["mean_lst_c"] - cropland_baseline_lst
+            if d["mean_lst_c"] is not None and cropland_baseline_lst is not None
+            else None
+        )
+
+    correlation = None
+    try:
+        worldcover = ee.ImageCollection("ESA/WorldCover/v200").first()
+        sample_image = combined.addBands(worldcover.select("Map").rename("LandCover"))
+        sample_data = sample_image.sample(
+            region=region, scale=250, numPixels=300, seed=42, geometries=False, tileScale=4
+        ).getInfo()
+
+        points = []
+        for feat in (sample_data or {}).get("features", []):
+            props = feat.get("properties", {})
+            lst_v, ndvi_v, lc_v = props.get("LST"), props.get("NDVI"), props.get("LandCover")
+            if lst_v is None or ndvi_v is None or lc_v is None:
+                continue
+            if not (-50 < lst_v < 60) or not (-1 <= ndvi_v <= 1):
+                continue
+            points.append({"lst": lst_v, "ndvi": ndvi_v, "land_cover": int(lc_v)})
+
+        if len(points) > 10:
+            r = pearson_correlation([p["ndvi"] for p in points], [p["lst"] for p in points])
+            urban_lsts = [p["lst"] for p in points if p["land_cover"] == 50]
+            veg_lsts = [p["lst"] for p in points if p["land_cover"] in (10, 20, 30)]
+            urban_mean = sum(urban_lsts) / len(urban_lsts) if urban_lsts else None
+            veg_mean = sum(veg_lsts) / len(veg_lsts) if veg_lsts else None
+
+            buckets = {}
+            for p in points:
+                bucket = buckets.setdefault(p["land_cover"], {"lst": [], "ndvi": []})
+                bucket["lst"].append(p["lst"])
+                bucket["ndvi"].append(p["ndvi"])
+
+            land_cover_stats = [
+                {
+                    "land_cover": WORLDCOVER_NAME_BY_ID.get(lc, f"Class {lc}"),
+                    "count": len(vals["lst"]),
+                    "area_pct": round(len(vals["lst"]) / len(points) * 100, 2),
+                    "mean_lst_c": sum(vals["lst"]) / len(vals["lst"]),
+                    "mean_ndvi": sum(vals["ndvi"]) / len(vals["ndvi"]),
+                }
+                for lc, vals in buckets.items()
+            ]
+            land_cover_stats.sort(key=lambda x: x["area_pct"], reverse=True)
+
+            correlation = {
+                "ndvi_lst_r": r,
+                "urban_mean_lst_c": urban_mean,
+                "vegetation_mean_lst_c": veg_mean,
+                "uhi_effect_c": (urban_mean - veg_mean) if urban_mean is not None and veg_mean is not None else None,
+                "sample_points": points,
+                "land_cover_stats": land_cover_stats,
+            }
+    except Exception as exc:
+        print(f"Correlation analysis failed: {exc}")
+
+    lulc_time_series = []
+    try:
+        worldcover_ts = ee.ImageCollection("ESA/WorldCover/v200").first().select("Map").rename("LandCover")
+        scene_count = composite_collection.size().getInfo()
+        if scene_count > 0:
+            scene_list = composite_collection.toList(scene_count)
+            for idx in range(scene_count):
+                img = ee.Image(scene_list.get(idx))
+                date_str = ee.Date(img.get("system:time_start")).format("YYYY-MM-dd").getInfo()
+                grouped = (
+                    img.select("LST")
+                    .addBands(worldcover_ts)
+                    .reduceRegion(
+                        reducer=ee.Reducer.mean().group(groupField=1, groupName="landcover"),
+                        geometry=region,
+                        scale=500,
+                        maxPixels=1e9,
+                        bestEffort=True,
+                        tileScale=4,
+                    )
+                    .get("groups")
+                    .getInfo()
+                )
+                for group_item in grouped or []:
+                    lc_code_raw, lc_mean = group_item.get("landcover"), group_item.get("mean")
+                    if lc_code_raw is None or lc_mean is None:
+                        continue
+                    lc_code = int(lc_code_raw)
+                    lulc_time_series.append(
+                        {
+                            "date": date_str,
+                            "land_cover": WORLDCOVER_NAME_BY_ID.get(lc_code, f"Class {lc_code}"),
+                            "mean_lst_c": float(lc_mean),
+                        }
+                    )
+    except Exception as exc:
+        print(f"LST-by-land-cover time series failed: {exc}")
+
+    return {
+        "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "air_temp_window": {"start": air_start_dt.isoformat(), "end": air_end_dt.isoformat()},
+        "citywide_air_temp_c": citywide_air_temp,
+        "cropland_baseline_lst_c": cropland_baseline_lst,
+        "districts": district_rows,
+        "correlation": correlation,
+        "lulc_time_series": lulc_time_series,
+    }
 
 
 def build_weather_dataset() -> dict:
@@ -357,13 +596,36 @@ def main() -> None:
         json.dump(timeseries_output, f, ensure_ascii=True)
     print(f"Wrote {len(timeseries_output['records'])} records to backend-data/timeseries_scenes.json")
 
+    # Build the rolling-window composite once; map layers and district analytics share it.
+    window_days = int(os.environ.get("MAP_COMPOSITE_DAYS", "45"))
+    composite_end = datetime.utcnow().date()
+    composite_start = composite_end - timedelta(days=window_days)
+    composite_collection = get_landsat8_collection(
+        composite_start.isoformat(), composite_end.isoformat(), region
+    )
+    lst_image = composite_collection.select("LST").median()
+    ndvi_image = composite_collection.select("NDVI").median()
+
     try:
-        map_layers_output = build_map_layers_dataset(region)
+        map_layers_output = build_map_layers_dataset(
+            region, lst_image, ndvi_image, composite_start, composite_end
+        )
         with open(os.path.join(out_dir, "map_layers.json"), "w", encoding="utf-8") as f:
             json.dump(map_layers_output, f, ensure_ascii=True)
         print("Wrote backend-data/map_layers.json")
     except Exception as exc:
         print(f"Map layer precompute failed, leaving previous map_layers.json in place if any: {exc}")
+
+    try:
+        district_features = load_district_features(workspace)
+        analytics_output = build_district_analytics_dataset(
+            region, district_features, lst_image, ndvi_image, composite_collection
+        )
+        with open(os.path.join(out_dir, "district_analytics.json"), "w", encoding="utf-8") as f:
+            json.dump(analytics_output, f, ensure_ascii=True)
+        print(f"Wrote district_analytics.json for {len(analytics_output['districts'])} districts")
+    except Exception as exc:
+        print(f"District analytics precompute failed, leaving previous district_analytics.json in place if any: {exc}")
 
     try:
         weather_output = build_weather_dataset()
