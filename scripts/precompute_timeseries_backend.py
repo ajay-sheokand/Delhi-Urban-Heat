@@ -121,7 +121,16 @@ def load_region(workspace: str) -> ee.Geometry:
 
 
 def load_district_features(workspace: str) -> list:
-    """Per-district (name, ee.Geometry) pairs from delhi_admin.geojson's 11 features."""
+    """Per-district (name, ee.Geometry) pairs from delhi_admin.geojson's 11 features.
+
+    A couple of these polygons have invalid ring winding (same defect class
+    load_region() already works around for the merged region) and make EE
+    throw "Invalid GeoJSON geometry" as soon as the geometry is touched. Since
+    that can happen before any per-district try/except downstream gets a
+    chance to run, validate here and fall back to a buffered point around the
+    district's known centroid (DISTRICT_LOCATIONS) so one bad polygon doesn't
+    take down the whole analytics dataset.
+    """
     geojson_path = os.path.join(workspace, "delhi_admin.geojson")
     with open(geojson_path, "r", encoding="utf-8") as f:
         payload = json.load(f)
@@ -130,8 +139,21 @@ def load_district_features(workspace: str) -> list:
     for feature in payload.get("features", []):
         props = feature.get("properties", {}) or {}
         name = (props.get("District") or props.get("Name") or "Unknown").title()
-        geom = ee.Geometry(feature.get("geometry"))
-        districts.append((name, geom))
+
+        geom = None
+        try:
+            candidate = ee.Geometry(feature.get("geometry"))
+            _ = candidate.area(1).getInfo()  # force server-side validation now
+            geom = candidate
+        except Exception as exc:
+            print(f"District polygon invalid for {name}, using buffered centroid fallback: {exc}")
+            loc = next((d for d in DISTRICT_LOCATIONS if d["name"] == name), None)
+            if loc:
+                geom = ee.Geometry.Point([loc["lon"], loc["lat"]]).buffer(3000)
+
+        if geom is not None:
+            districts.append((name, geom))
+
     return districts
 
 
