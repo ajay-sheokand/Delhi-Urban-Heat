@@ -1,0 +1,173 @@
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    color: #222;
+}
+
+#map {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 100%;
+}
+
+.panel {
+    position: absolute;
+    z-index: 2;
+    background: rgba(255, 255, 255, 0.96);
+    padding: 14px 16px;
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.panel h1 {
+    font-size: 16px;
+    margin: 0 0 8px 0;
+    color: #222;
+}
+
+.panel h2 {
+    font-size: 13px;
+    margin: 0 0 8px 0;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #555;
+}
+
+.panel p {
+    font-size: 12px;
+    color: #555;
+    line-height: 1.4;
+    margin: 0;
+}
+
+.muted {
+    font-size: 11px;
+    color: #888;
+    margin-top: 8px;
+}
+
+.panel-top-left {
+    top: 16px;
+    left: 16px;
+    max-width: 300px;
+}
+
+.panel-top-right {
+    top: 16px;
+    right: 16px;
+    min-width: 200px;
+}
+
+.panel-top-right label {
+    display: block;
+    font-size: 13px;
+    margin-bottom: 6px;
+    cursor: pointer;
+}
+
+.legend {
+    position: absolute;
+    left: 16px;
+    z-index: 2;
+    background: rgba(255, 255, 255, 0.96);
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    padding: 8px 12px;
+    font-size: 11px;
+    min-width: 180px;
+}
+
+.legend-title {
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: #333;
+}
+
+.legend-gradient {
+    height: 10px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+}
+
+.legend-scale {
+    display: flex;
+    justify-content: space-between;
+    color: #555;
+}
+
+.legend-items {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #444;
+}
+
+.legend-swatch {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+.panel-bottom {
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+    max-height: 210px;
+    overflow: hidden;
+}
+
+.bottom-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.tab-btn {
+    border: none;
+    background: #eee;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.tab-btn.active {
+    background: #2c3e50;
+    color: white;
+}
+
+.tab-content {
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+#heat-alerts-list .alert-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    border-bottom: 1px solid #eee;
+    font-size: 13px;
+}
+
+#heat-alerts-list .alert-extreme { color: #b30000; font-weight: 600; }
+#heat-alerts-list .alert-high { color: #cc7000; font-weight: 600; }
+#heat-alerts-list .alert-normal { color: #2e7d32; }
+
+@media (max-width: 768px) {
+    .panel-top-left { max-width: 220px; padding: 10px 12px; }
+    .panel-top-right { min-width: 160px; padding: 10px 12px; }
+    .panel-top-right label { font-size: 12px; }
+    .panel-bottom { max-height: 180px; }
+}

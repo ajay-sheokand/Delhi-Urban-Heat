@@ -3,6 +3,7 @@ import os
 from datetime import datetime, timedelta
 
 import ee
+import requests
 from google.oauth2 import service_account
 
 
@@ -74,9 +75,16 @@ def mask_landsat_l2(image: ee.Image) -> ee.Image:
 
 
 def prep_landsat8_l2(image: ee.Image) -> ee.Image:
+    # LST (Kelvin) -> Celsius
     lst_k = image.select("ST_B10").multiply(0.00341802).add(149.0)
     lst_c = lst_k.subtract(273.15).rename("LST")
-    return image.addBands([lst_c]).select(["LST"])
+
+    # Surface reflectance scaling for NDVI
+    red = image.select("SR_B4").multiply(0.0000275).add(-0.2)
+    nir = image.select("SR_B5").multiply(0.0000275).add(-0.2)
+    ndvi = nir.subtract(red).divide(nir.add(red)).rename("NDVI")
+
+    return image.addBands([lst_c, ndvi]).select(["LST", "NDVI"])
 
 
 def get_landsat8_collection(start_date: str, end_date: str, geom: ee.Geometry) -> ee.ImageCollection:
@@ -91,27 +99,28 @@ def get_landsat8_collection(start_date: str, end_date: str, geom: ee.Geometry) -
     )
 
 
-def main() -> None:
-    init_ee()
-
-    workspace = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+def load_region(workspace: str) -> ee.Geometry:
     geojson_path = os.path.join(workspace, "delhi_admin.geojson")
     try:
         region = load_delhi_geometry_from_geojson(geojson_path)
         # Force a lightweight server validation so invalid geometries fail here.
         _ = region.area(1).getInfo()
         print("Using local geometry: delhi_admin.geojson")
+        return region
     except Exception as exc:
         print(f"Local GeoJSON geometry invalid or unavailable: {exc}")
-        try:
-            region = load_delhi_geometry_from_ee()
-            _ = region.area(1).getInfo()
-            print("Using fallback geometry: FAO/GAUL_SIMPLIFIED_500m/2015/level1 (Delhi)")
-        except Exception as ee_exc:
-            print(f"EE Delhi geometry fallback failed: {ee_exc}")
-            region = ee.Geometry.Rectangle([76.8388, 28.4044, 77.3465, 28.8833])
-            print("Using final fallback geometry: Delhi rectangle")
+    try:
+        region = load_delhi_geometry_from_ee()
+        _ = region.area(1).getInfo()
+        print("Using fallback geometry: FAO/GAUL_SIMPLIFIED_500m/2015/level1 (Delhi)")
+        return region
+    except Exception as ee_exc:
+        print(f"EE Delhi geometry fallback failed: {ee_exc}")
+        print("Using final fallback geometry: Delhi rectangle")
+        return ee.Geometry.Rectangle([76.8388, 28.4044, 77.3465, 28.8833])
 
+
+def build_timeseries_dataset(region: ee.Geometry) -> dict:
     days_back = int(os.environ.get("PRECOMPUTE_DAYS", "730"))
     end_dt = datetime.utcnow().date()
     start_dt = end_dt - timedelta(days=days_back)
@@ -120,7 +129,7 @@ def main() -> None:
 
     # Compute mean LST once per image on the server, then aggregate arrays in bulk.
     def add_scene_mean_lst(image: ee.Image) -> ee.Image:
-        mean_lst = image.reduceRegion(
+        mean_lst = image.select("LST").reduceRegion(
             reducer=ee.Reducer.mean(),
             geometry=region,
             scale=250,
@@ -155,10 +164,7 @@ def main() -> None:
             }
         )
 
-    out_dir = os.path.join(workspace, "backend-data")
-    os.makedirs(out_dir, exist_ok=True)
-
-    output = {
+    return {
         "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "coverage_start": start_dt.isoformat(),
         "coverage_end": end_dt.isoformat(),
@@ -166,10 +172,206 @@ def main() -> None:
         "records": records,
     }
 
-    with open(os.path.join(out_dir, "timeseries_scenes.json"), "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=True)
 
-    print(f"Wrote {len(records)} records to backend-data/timeseries_scenes.json")
+# Same palettes/ranges as the live LST/NDVI/land-cover layers in app.py, so the
+# precomputed tiles look identical to what the Streamlit map used to render.
+LST_PALETTE = [
+    "#0000ff", "#00ccff", "#00ff00", "#ffff00", "#ff8800", "#ff0000", "#8b0000",
+]
+NDVI_PALETTE = [
+    "#8B0000", "#DC143C", "#FF4500", "#FFD700", "#FFFF00", "#7FFF00", "#00FF00", "#006400",
+]
+WORLDCOVER_PALETTE = [
+    "#006400", "#FFBB22", "#FFFF4C", "#F096FF", "#FA0000",
+    "#B4B4B4", "#F0F0F0", "#0064C8", "#0096A0", "#00CF75", "#FAE6A0",
+]
+WORLDCOVER_CLASSES = [
+    {"id": 10, "color": "#006400", "label": "Tree Cover"},
+    {"id": 20, "color": "#FFBB22", "label": "Shrubland"},
+    {"id": 30, "color": "#FFFF4C", "label": "Grassland"},
+    {"id": 40, "color": "#F096FF", "label": "Cropland"},
+    {"id": 50, "color": "#FA0000", "label": "Built-up (Urban)"},
+    {"id": 60, "color": "#B4B4B4", "label": "Bare/Sparse Veg"},
+    {"id": 70, "color": "#F0F0F0", "label": "Snow/Ice"},
+    {"id": 80, "color": "#0064C8", "label": "Water Bodies"},
+    {"id": 90, "color": "#0096A0", "label": "Wetland"},
+    {"id": 95, "color": "#00CF75", "label": "Mangroves"},
+    {"id": 100, "color": "#FAE6A0", "label": "Moss/Lichen"},
+]
+
+
+def build_map_layers_dataset(region: ee.Geometry) -> dict:
+    window_days = int(os.environ.get("MAP_COMPOSITE_DAYS", "45"))
+    end_dt = datetime.utcnow().date()
+    start_dt = end_dt - timedelta(days=window_days)
+
+    collection = get_landsat8_collection(start_dt.isoformat(), end_dt.isoformat(), region)
+    lst_image = collection.select("LST").median().clip(region)
+    ndvi_image = collection.select("NDVI").median().clip(region)
+
+    try:
+        lst_stats = lst_image.reduceRegion(
+            reducer=ee.Reducer.minMax(),
+            geometry=region,
+            scale=100,
+            maxPixels=1e9,
+            bestEffort=True,
+            tileScale=4,
+        ).getInfo()
+        data_min = lst_stats.get("LST_min", 10)
+        data_max = lst_stats.get("LST_max", 40)
+        buffer = (data_max - data_min) * 0.1
+        lst_min = max(data_min - buffer, -5)
+        lst_max = min(data_max + buffer, 55)
+    except Exception as exc:
+        print(f"LST min/max calculation failed, using fallback range: {exc}")
+        lst_min, lst_max = 10, 40
+
+    lst_vis = {"min": lst_min, "max": lst_max, "palette": LST_PALETTE}
+    lst_mapid = lst_image.getMapId(lst_vis)
+
+    ndvi_vis = {"min": -0.3, "max": 1, "palette": NDVI_PALETTE}
+    ndvi_mapid = ndvi_image.getMapId(ndvi_vis)
+
+    worldcover = ee.ImageCollection("ESA/WorldCover/v200").first().clip(region)
+    worldcover_vis = {"min": 10, "max": 100, "palette": WORLDCOVER_PALETTE}
+    worldcover_mapid = worldcover.getMapId(worldcover_vis)
+
+    try:
+        histogram = worldcover.reduceRegion(
+            reducer=ee.Reducer.frequencyHistogram(),
+            geometry=region,
+            scale=100,
+            maxPixels=1e9,
+            bestEffort=True,
+            tileScale=4,
+        ).getInfo()
+        land_cover_histogram = histogram.get("Map", {}) if histogram else {}
+    except Exception as exc:
+        print(f"Land cover histogram calculation failed: {exc}")
+        land_cover_histogram = {}
+
+    return {
+        "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "coverage_start": start_dt.isoformat(),
+        "coverage_end": end_dt.isoformat(),
+        "layers": {
+            "lst": {
+                "tile_url": lst_mapid["tile_fetcher"].url_format,
+                "min": lst_min,
+                "max": lst_max,
+                "palette": LST_PALETTE,
+                "opacity": 0.6,
+            },
+            "ndvi": {
+                "tile_url": ndvi_mapid["tile_fetcher"].url_format,
+                "min": -0.3,
+                "max": 1,
+                "palette": NDVI_PALETTE,
+                "opacity": 0.45,
+            },
+            "land_cover": {
+                "tile_url": worldcover_mapid["tile_fetcher"].url_format,
+                "source": "ESA WorldCover 2021 (10m)",
+                "classes": WORLDCOVER_CLASSES,
+                "histogram": land_cover_histogram,
+                "opacity": 0.5,
+            },
+        },
+    }
+
+
+# Same 11 district centroids used by the live weather markers in app.py.
+DISTRICT_LOCATIONS = [
+    {"name": "Central", "lat": 28.6422, "lon": 77.2183},
+    {"name": "East", "lat": 28.6261, "lon": 77.3006},
+    {"name": "New Delhi", "lat": 28.6107, "lon": 77.2193},
+    {"name": "North", "lat": 28.7043, "lon": 77.2074},
+    {"name": "North East", "lat": 28.7234, "lon": 77.2701},
+    {"name": "North West", "lat": 28.7717, "lon": 77.0986},
+    {"name": "Shahadra", "lat": 28.7100, "lon": 77.3150},
+    {"name": "South", "lat": 28.5032, "lon": 77.2332},
+    {"name": "South East", "lat": 28.5550, "lon": 77.2850},
+    {"name": "South West", "lat": 28.5732, "lon": 77.0396},
+    {"name": "West", "lat": 28.6564, "lon": 77.0709},
+]
+
+
+def heat_alert(temp_c: float) -> dict:
+    if temp_c >= 40:
+        return {"level": "extreme", "label": "🔥 Extreme Heat Alert"}
+    if temp_c >= 35:
+        return {"level": "high", "label": "⚠️ High Heat Warning"}
+    return {"level": "normal", "label": "🌤️ Normal Temperature"}
+
+
+def build_weather_dataset() -> dict:
+    api_key = os.environ.get("OPENWEATHER_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("Missing required env var: OPENWEATHER_API_KEY")
+
+    districts = []
+    for loc in DISTRICT_LOCATIONS:
+        url = (
+            "https://api.openweathermap.org/data/2.5/weather"
+            f"?lat={loc['lat']}&lon={loc['lon']}&appid={api_key}&units=metric"
+        )
+        try:
+            response = requests.get(url, timeout=15)
+            response.raise_for_status()
+            payload = response.json()
+            temp_c = payload["main"]["temp"]
+            alert = heat_alert(temp_c)
+            districts.append(
+                {
+                    "name": loc["name"],
+                    "lat": loc["lat"],
+                    "lon": loc["lon"],
+                    "temp_c": temp_c,
+                    "feels_like_c": payload["main"]["feels_like"],
+                    "humidity": payload["main"]["humidity"],
+                    "heat_alert_level": alert["level"],
+                    "heat_alert_label": alert["label"],
+                }
+            )
+        except Exception as exc:
+            print(f"Weather fetch failed for {loc['name']}: {exc}")
+
+    return {
+        "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "districts": districts,
+    }
+
+
+def main() -> None:
+    init_ee()
+
+    workspace = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    region = load_region(workspace)
+
+    out_dir = os.path.join(workspace, "backend-data")
+    os.makedirs(out_dir, exist_ok=True)
+
+    timeseries_output = build_timeseries_dataset(region)
+    with open(os.path.join(out_dir, "timeseries_scenes.json"), "w", encoding="utf-8") as f:
+        json.dump(timeseries_output, f, ensure_ascii=True)
+    print(f"Wrote {len(timeseries_output['records'])} records to backend-data/timeseries_scenes.json")
+
+    try:
+        map_layers_output = build_map_layers_dataset(region)
+        with open(os.path.join(out_dir, "map_layers.json"), "w", encoding="utf-8") as f:
+            json.dump(map_layers_output, f, ensure_ascii=True)
+        print("Wrote backend-data/map_layers.json")
+    except Exception as exc:
+        print(f"Map layer precompute failed, leaving previous map_layers.json in place if any: {exc}")
+
+    try:
+        weather_output = build_weather_dataset()
+        with open(os.path.join(out_dir, "weather.json"), "w", encoding="utf-8") as f:
+            json.dump(weather_output, f, ensure_ascii=True)
+        print(f"Wrote weather.json for {len(weather_output['districts'])} districts")
+    except Exception as exc:
+        print(f"Weather precompute failed, leaving previous weather.json in place if any: {exc}")
 
 
 if __name__ == "__main__":

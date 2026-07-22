@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Delhi Urban Heat Monitor</title>
+    <script src="https://unpkg.com/maplibre-gl@3.x/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@3.x/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+    <div id="map"></div>
+
+    <div class="panel panel-top-left">
+        <h1>🌡️ Delhi Urban Heat Monitor</h1>
+        <p>Satellite-derived land surface temperature, vegetation and land cover across Delhi's 11 districts. Map layers refresh automatically every 6 hours.</p>
+        <div id="data-updated" class="muted"></div>
+    </div>
+
+    <div class="panel panel-top-right" id="layer-panel">
+        <h2>Layers</h2>
+        <label><input type="checkbox" id="toggle-lst" checked /> 🌡️ Land Surface Temperature</label>
+        <label><input type="checkbox" id="toggle-ndvi" /> 🌿 Vegetation Index (NDVI)</label>
+        <label><input type="checkbox" id="toggle-landcover" /> 🌍 Land Cover</label>
+        <label><input type="checkbox" id="toggle-districts" checked /> 🗺️ District Boundaries</label>
+        <label><input type="checkbox" id="toggle-weather" checked /> 🌤️ Weather Markers</label>
+    </div>
+
+    <div class="legend" id="legend-lst">
+        <div class="legend-title">🌡️ LST Legend (°C)</div>
+        <div class="legend-gradient" id="legend-lst-gradient"></div>
+        <div class="legend-scale" id="legend-lst-scale"></div>
+    </div>
+
+    <div class="legend" id="legend-ndvi" style="display:none;">
+        <div class="legend-title">🌿 NDVI Legend</div>
+        <div class="legend-gradient" id="legend-ndvi-gradient"></div>
+        <div class="legend-scale"><span>-0.3</span><span>1.0</span></div>
+    </div>
+
+    <div class="legend" id="legend-landcover" style="display:none;">
+        <div class="legend-title">🌍 Land Cover Legend</div>
+        <div class="legend-items" id="legend-landcover-items"></div>
+    </div>
+
+    <div class="panel panel-bottom" id="bottom-panel">
+        <div class="bottom-tabs">
+            <button class="tab-btn active" data-tab="chart">📈 Time Series (LST)</button>
+            <button class="tab-btn" data-tab="alerts">🔥 Heat Alerts</button>
+        </div>
+        <div class="tab-content" id="tab-chart">
+            <canvas id="lst-chart" height="90"></canvas>
+        </div>
+        <div class="tab-content" id="tab-alerts" style="display:none;">
+            <div id="weather-updated" class="muted"></div>
+            <div id="heat-alerts-list">Loading weather…</div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

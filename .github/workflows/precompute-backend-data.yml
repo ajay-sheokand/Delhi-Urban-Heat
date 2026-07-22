@@ -25,6 +25,7 @@ jobs:
         env:
           GEE_SERVICE_ACCOUNT: ${{ secrets.GEE_SERVICE_ACCOUNT }}
           GEE_PRIVATE_KEY: ${{ secrets.GEE_PRIVATE_KEY }}
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
         run: |
           if [ -z "$GEE_SERVICE_ACCOUNT" ]; then
             echo "Missing secret: GEE_SERVICE_ACCOUNT"
@@ -33,6 +34,9 @@ jobs:
           if [ -z "$GEE_PRIVATE_KEY" ]; then
             echo "Missing secret: GEE_PRIVATE_KEY"
             exit 1
+          fi
+          if [ -z "$OPENWEATHER_API_KEY" ]; then
+            echo "Warning: OPENWEATHER_API_KEY not set — weather.json will not be refreshed this run."
           fi
 
       - name: Install dependencies
@@ -45,12 +49,15 @@ jobs:
           GEE_SERVICE_ACCOUNT: ${{ secrets.GEE_SERVICE_ACCOUNT }}
           GEE_PRIVATE_KEY: ${{ secrets.GEE_PRIVATE_KEY }}
           PRECOMPUTE_DAYS: ${{ secrets.PRECOMPUTE_DAYS }}
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
         run: |
           python scripts/precompute_timeseries_backend.py
 
       - name: Ensure pages content root
         run: |
           mkdir -p public
+          cp -r web/* public/
+          cp delhi_admin.geojson public/
           cp -r backend-data/* public/
 
       - name: Publish to gh-pages

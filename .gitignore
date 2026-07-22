@@ -7,3 +7,6 @@
 
 # Repomix output
 repomix-output.xml
+
+# Python bytecode cache
+__pycache__/

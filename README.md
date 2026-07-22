@@ -1,8 +1,10 @@
 # Delhi Urban Heat Monitoring Dashboard
 
-Interactive Streamlit dashboard for monitoring urban heat in Delhi using satellite and weather data.
+Static, precomputed dashboard for monitoring urban heat in Delhi using satellite and weather data.
 
-Live app: `https://delhi-urban-heat.streamlit.app/`
+Live app: `https://<your-github-username>.github.io/<your-repo-name>/`
+
+A legacy Streamlit dashboard (`app.py`) is still in the repo but is no longer the primary/linked app — see [Legacy Streamlit App](#legacy-streamlit-app).
 
 ## Scope
 
@@ -10,26 +12,21 @@ Live app: `https://delhi-urban-heat.streamlit.app/`
 - District coverage: 11 districts
 - Main use case: map-based heat monitoring + historical analysis
 
-## What The App Shows
+## What The Static Frontend Shows (v1)
 
-- Landsat 8 L2 Land Surface Temperature (LST)
-- Landsat 8 NDVI (Sentinel-2 fallback in one analysis block)
-- Land Cover layer (ESA WorldCover primary, MODIS fallback)
-- Live district weather markers (OpenWeather)
-- Historical district air temperature (NASA POWER)
+- Landsat 8 L2 Land Surface Temperature (LST), median composite over a rolling recent window
+- Landsat 8 NDVI (same window)
+- Land Cover layer (ESA WorldCover)
+- District weather markers and heat alerts (OpenWeather, precomputed every 6h)
 - Time series analysis for LST
-- Spatial/UHI analysis and NDVI-LST-LULC correlation analysis
+- District boundaries overlay
+
+The following sections of the older Streamlit app are **not yet ported** to the static frontend and remain available only in the legacy app: spatial/UHI analysis (air temperature vs LST by district), NDVI-LST-LULC correlation analysis, historical NASA POWER air temperature, and detailed per-district comparison tables. These are planned as a fast-follow.
 
 ## Key UI Behavior
 
-- Satellite section supports date range selection.
-- Map has two modes:
-  - `Median composite (range)`
-  - `Scene selection (single scene)`
-- In scene mode, users pick one scene directly from a select box (date-time, cloud %, scene id in label).
-- Scene tables in the satellite/date-range section are intentionally hidden.
-- Dynamic legends are attached to map layers and update based on layer visibility.
-- Auto-refresh runs every 5 minutes.
+- Map layers (LST/NDVI/land cover) and weather/heat alerts are all precomputed server-side and refresh automatically every 6 hours via GitHub Actions — there is no per-visit satellite or weather computation, and no API keys are ever exposed to the browser. The page loads instantly but reflects data as of the last refresh, not the live moment.
+- Legends update based on which layers are toggled on.
 
 ## Data Sources
 
@@ -54,15 +51,35 @@ Live app: `https://delhi-urban-heat.streamlit.app/`
 
 ## Project Structure
 
-- `app.py`: Streamlit dashboard
-- `delhi_admin.geojson`: Delhi administrative boundaries
+- `web/`: static frontend (primary app) — `index.html`, `app.js` (MapLibre map + Chart.js time series + weather), `style.css`
+- `app.py`: legacy Streamlit dashboard (secondary, not linked as the primary app)
+- `delhi_admin.geojson`: Delhi administrative boundaries (used by both the static frontend and the precompute script)
 - `delhi_admin.kml`: Alternate boundary file
-- `scripts/precompute_timeseries_backend.py`: Precompute time-series JSON for fast mode
-- `.github/workflows/precompute-backend-data.yml`: Scheduled/manual precompute and publish
+- `scripts/precompute_timeseries_backend.py`: Precomputes `timeseries_scenes.json` (LST time series), `map_layers.json` (LST/NDVI/land-cover tile URLs), and `weather.json` (per-district OpenWeather readings + heat alerts)
+- `.github/workflows/precompute-backend-data.yml`: Scheduled/manual precompute, then publishes `web/`, `delhi_admin.geojson`, and `backend-data/` to `gh-pages`
 - `requirements.txt`: Python dependencies
 - `runtime.txt`: Python runtime pin
 
-## Local Setup
+## Static Frontend Setup (GitHub Pages)
+
+The static frontend and its data are published together to the `gh-pages` branch by the same workflow, so setup is a single flow:
+
+1. Add GitHub Actions secrets in your repo:
+   - `GEE_SERVICE_ACCOUNT`
+   - `GEE_PRIVATE_KEY`
+   - `OPENWEATHER_API_KEY` — used server-side only, inside the Actions run, to precompute `weather.json`. It is never written into any client-side file.
+   - `PRECOMPUTE_DAYS` (optional, e.g. `730`) — time-series history window
+   - `MAP_COMPOSITE_DAYS` is set via an env var in the script (default `45`) — change it in `scripts/precompute_timeseries_backend.py` if you want a different rolling window for the map layers, not a required secret.
+2. Ensure GitHub Actions is enabled, then run the workflow: `Actions -> Precompute Backend Data -> Run workflow`.
+3. In `Settings -> Pages` set:
+   - Source: `Deploy from a branch`
+   - Branch: `gh-pages`
+   - Folder: `/ (root)`
+4. Visit `https://<your-github-username>.github.io/<your-repo-name>/` — this now serves `web/index.html` directly, reading `map_layers.json`, `weather.json`, and `timeseries_scenes.json` from the same site.
+
+The workflow re-runs every 6 hours, regenerating all three JSON files (including fresh Earth Engine tile URLs and fresh weather readings) and republishing everything to `gh-pages`. If `OPENWEATHER_API_KEY` is missing or a weather fetch fails, the script leaves the previous `weather.json` in place rather than failing the whole run.
+
+## Legacy Streamlit App
 
 ### 1. Create virtual environment
 
@@ -110,30 +127,7 @@ streamlit run app.py
 
 Default URL: `http://localhost:8501`
 
-## Optional Fast Backend (GitHub Pages)
-
-This mode precomputes `timeseries_scenes.json` and serves it from GitHub Pages so time-series loading is faster.
-
-### Steps
-
-1. Add GitHub Actions secrets in your repo:
-   - `GEE_SERVICE_ACCOUNT`
-   - `GEE_PRIVATE_KEY`
-   - `PRECOMPUTE_DAYS` (optional, e.g. `730`)
-2. Ensure GitHub Actions is enabled.
-3. Run workflow: `Actions -> Precompute Backend Data -> Run workflow`.
-4. In `Settings -> Pages` set:
-   - Source: `Deploy from a branch`
-   - Branch: `gh-pages`
-   - Folder: `/ (root)`
-5. Verify output URL:
-   - `https://<your-github-username>.github.io/<your-repo-name>/timeseries_scenes.json`
-6. Set `PRECOMPUTED_DATA_BASE_URL` in `.streamlit/secrets.toml` and restart app.
-
-Behavior:
-
-- If precomputed JSON is available, app uses it for time-series inventory/means.
-- If unavailable, app falls back to live Earth Engine computation.
+The Streamlit app can also read the same precomputed `timeseries_scenes.json` for faster time-series loading: set `PRECOMPUTED_DATA_BASE_URL` in `.streamlit/secrets.toml` to your GitHub Pages URL and restart. If unavailable, it falls back to live Earth Engine computation.
 
 ## Troubleshooting
 
@@ -143,15 +137,18 @@ Behavior:
   - Current precompute script already includes fallback geometry logic.
 - No workflow visible in Actions:
   - Confirm workflow file is on `main` and Actions are enabled in repo settings.
+- Static frontend map layers look stale or missing:
+  - Earth Engine tile URLs from `getMapId()` are regenerated every 6h by the cron. If a browser tab is left open across a refresh boundary, or the precompute run fails, reload the page — `map_layers.json` keeps the previous run's tiles until the next successful run.
 
 ## Security
 
 - Keep `.streamlit/secrets.toml` out of git.
 - Rotate exposed private keys immediately.
 - Prefer GitHub/Streamlit secret managers over plaintext files.
+- `GEE_SERVICE_ACCOUNT`, `GEE_PRIVATE_KEY`, and `OPENWEATHER_API_KEY` must all stay server-side only (GitHub Actions secrets) — none of them are ever written into `web/app.js` or any other client-side file. The static frontend only ever fetches the precomputed JSON output (`map_layers.json`, `timeseries_scenes.json`, `weather.json`), never a live third-party API directly.
 
 For educational and research use.
 
 ## Last Updated
 
-March 12, 2026
+July 22, 2026
