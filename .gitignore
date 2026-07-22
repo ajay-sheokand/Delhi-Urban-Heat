@@ -4,3 +4,6 @@
 # Large geospatial files that exceed GitHub limits
 /archive/
 /geoBoundaries-IND-ADM3-all/
+
+# Repomix output
+repomix-output.xml
