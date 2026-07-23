@@ -201,7 +201,7 @@ function buildBoundaryOverlayLayers() {
                 getLineColor: hexToRgb("#2c3e50", 230),
                 lineWidthMinPixels: 1.5,
                 visible: document.getElementById("toggle-districts").checked,
-                parameters: { depthCompare: "always" },
+                parameters: { depthCompare: "always", depthWriteEnabled: false },
             })
         );
     }
@@ -220,7 +220,7 @@ function buildBoundaryOverlayLayers() {
                 getLineWidth: 2.5,
                 lineWidthMinPixels: 2.5,
                 visible: document.getElementById("toggle-wards").checked,
-                parameters: { depthCompare: "always" },
+                parameters: { depthCompare: "always", depthWriteEnabled: false },
             })
         );
     }
@@ -239,7 +239,7 @@ function buildBoundaryOverlayLayers() {
                 pointRadiusUnits: "pixels",
                 lineWidthMinPixels: 1,
                 visible: document.getElementById("toggle-jj-clusters").checked,
-                parameters: { depthCompare: "always" },
+                parameters: { depthCompare: "always", depthWriteEnabled: false },
             })
         );
     }
@@ -282,7 +282,7 @@ function buildRasterOverlayLayers() {
                 tileSize: 256,
                 opacity: cached.opacity,
                 visible: checkbox.checked,
-                parameters: { depthCompare: "always" },
+                parameters: { depthCompare: "always", depthWriteEnabled: false },
                 getTileData: fetchTileImage,
                 renderSubLayers: (props) => {
                     const { bbox } = props.tile;
@@ -290,7 +290,7 @@ function buildRasterOverlayLayers() {
                         data: null,
                         image: props.data,
                         bounds: [bbox.west, bbox.south, bbox.east, bbox.north],
-                        parameters: { depthCompare: "always" },
+                        parameters: { depthCompare: "always", depthWriteEnabled: false },
                     });
                 },
             })
