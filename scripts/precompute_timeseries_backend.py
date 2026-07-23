@@ -660,10 +660,21 @@ def build_ward_vulnerability_dataset(
     population_year = int(worldpop.get("year").getInfo())
     pop_rows = (
         worldpop.select("population")
-        .reduceRegions(collection=ward_fc, reducer=ee.Reducer.sum(), scale=100, tileScale=4)
+        .unmask(0)
+        .reduceRegions(
+            collection=ward_fc,
+            reducer=ee.Reducer.sum(),
+            scale=100,
+            maxPixels=1e9,
+            bestEffort=True,
+            tileScale=4,
+        )
         .getInfo()
         .get("features", [])
     )
+    print(f"DEBUG ward population: {len(pop_rows)} raw features returned")
+    if pop_rows:
+        print(f"DEBUG ward population sample properties: {pop_rows[0].get('properties')}")
     pop_by_ward = {f["properties"].get("ward_no"): f["properties"].get("population") for f in pop_rows}
 
     wards = []
