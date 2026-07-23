@@ -30,12 +30,46 @@ function showErrorBanner(message) {
     container.appendChild(div);
 }
 
+function applyCityChrome() {
+    document.getElementById("page-title").textContent = `Analytics | ${CITY.displayName} Urban Heat Monitor`;
+    document.getElementById("site-brand").textContent = `🌡️ ${CITY.displayName} Urban Heat Monitor`;
+    document.getElementById("page-heading").textContent = `📊 ${CITY.districtLabel} Analytics`;
+    document.getElementById("page-intro").textContent =
+        `Urban heat island intensity, vegetation-temperature correlation, and land-cover composition across ${CITY.displayName}'s ${CITY.districtCount} ${CITY.districtLabel.toLowerCase()}${CITY.districtCount === 1 ? "" : "s"}. Computed server-side from a rolling satellite/weather window and refreshed every 6 hours — not a live per-visit computation.`;
+    document.getElementById("air-temp-caveat").textContent =
+        `NASA POWER's air temperature grid is roughly 50-60km — coarser than ${CITY.displayName}'s ${CITY.districtLabel.toLowerCase()}s, so ${CITY.districtLabel.toLowerCase()}-to-${CITY.districtLabel.toLowerCase()} air-temperature differences below are naturally small. The surface UHI chart (Landsat LST, 100m resolution) is the more spatially meaningful comparison.`;
+    document.getElementById("uhi-air-chart-title").textContent = `UHI Intensity by ${CITY.districtLabel} (deviation from citywide mean air temp)`;
+    document.getElementById("uhi-surface-chart-title").textContent = `Surface UHI by ${CITY.districtLabel} (LST vs cropland baseline)`;
+    document.getElementById("air-lst-scatter-title").textContent = `Air Temp vs LST by ${CITY.districtLabel}`;
+    document.getElementById("ward-vulnerability-heading").textContent = `Heat Vulnerability by ${CITY.wardLabel}`;
+    document.getElementById("ward-vulnerability-chart-title").textContent = `Top 20 Most Vulnerable ${CITY.wardLabel}s`;
+    document.getElementById("ward-table-header-name").textContent = CITY.wardLabel;
+    document.getElementById("ward-table-header-complementary").textContent = CITY.complementaryLabel;
+    document.getElementById("district-table-heading").textContent = `${CITY.districtLabel} Comparison`;
+    document.getElementById("district-table-header-name").textContent = CITY.districtLabel;
+    document.getElementById("ward-vulnerability-intro").innerHTML =
+        `${CITY.displayName}'s ${CITY.districtCount} ${CITY.districtLabel.toLowerCase()}s are too large to show who is actually most exposed — each covers a large population.
+        This section re-runs the LST, NDVI and population inputs at ${CITY.wardLabel.toLowerCase()} resolution (${CITY.wardCount} ${CITY.wardLabel.toLowerCase()}s)
+        to rank the areas where high surface heat, low vegetation and high population density overlap.
+        <strong>Vulnerability score</strong> = the average of min-max normalized LST, inverse-normalized NDVI, and
+        normalized population density per ${CITY.wardLabel.toLowerCase()} (0–100, higher = more vulnerable). Air temperature is intentionally
+        <em>not</em> part of this score and stays ${CITY.districtLabel.toLowerCase()}-level only (see the caveat above) — NASA POWER's coarse
+        grid and city-scale weather stations don't carry real information at ${CITY.wardLabel.toLowerCase()} scale, so adding them here would
+        be false precision, not more signal. See the map's "${CITY.wardLabel} Boundaries" layer to click into any individual ${CITY.wardLabel.toLowerCase()}.`;
+    renderCitySwitcher("city-switcher");
+    wireCityAwareNavLinks();
+    document.querySelectorAll("[data-city-section]").forEach((el) => {
+        el.style.display = el.dataset.citySection === CITY.slug ? "" : "none";
+    });
+}
+
 async function main() {
+    applyCityChrome();
     let analytics, mapLayers;
     try {
         const [analyticsRes, mapLayersRes] = await Promise.all([
-            fetch("district_analytics.json", { cache: "no-store" }),
-            fetch("map_layers.json", { cache: "no-store" }),
+            fetch(cityDataPath("district_analytics.json"), { cache: "no-store" }),
+            fetch(cityDataPath("map_layers.json"), { cache: "no-store" }),
         ]);
         analytics = await analyticsRes.json();
         mapLayers = await mapLayersRes.json();
@@ -65,7 +99,7 @@ async function main() {
 async function loadWardVulnerability() {
     let data;
     try {
-        const res = await fetch("ward_vulnerability.json", { cache: "no-store" });
+        const res = await fetch(cityDataPath("ward_vulnerability.json"), { cache: "no-store" });
         data = await res.json();
     } catch (err) {
         console.error("Failed to load ward_vulnerability.json", err);
@@ -98,47 +132,56 @@ async function loadWardVulnerability() {
         },
     });
 
+    const keys = CITY.complementaryFieldKeys;
     const body = document.querySelector("#ward-vulnerability-table tbody");
     body.innerHTML = ranking
         .map(
             (w) =>
                 `<tr><td>${w.ward_name}</td><td>${fmt(w.mean_lst_c)}</td><td>${fmt(w.mean_ndvi, 3)}</td><td>${
                     w.population_density_km2 != null ? Math.round(w.population_density_km2).toLocaleString() : "N/A"
-                }</td><td>${fmt(w.vulnerability_score, 1)}</td><td>${w.jj_cluster_count ?? 0}</td></tr>`
+                }</td><td>${fmt(w.vulnerability_score, 1)}</td><td>${w[keys.count] ?? 0}</td></tr>`
         )
         .join("");
 
-    renderJJClusterSection(data);
+    renderComplementarySection(data);
 }
 
-function renderJJClusterSection(data) {
+function renderComplementarySection(data) {
     const validation = data.validation || {};
     const wards = data.wards || [];
+    const keys = CITY.complementaryFieldKeys;
 
-    const rEl = document.getElementById("jj-correlation-value");
+    const correlationElId = CITY.slug === "delhi" ? "jj-correlation-value" : "elderly-correlation-value";
+    const metaElId = CITY.slug === "delhi" ? "jj-cluster-meta" : "elderly-meta";
+    const chartElId = CITY.slug === "delhi" ? "jj-cluster-scatter-chart" : "elderly-scatter-chart";
+
+    const rEl = document.getElementById(correlationElId);
     if (rEl) {
-        rEl.textContent =
-            validation.jj_cluster_correlation_r !== null && validation.jj_cluster_correlation_r !== undefined
-                ? `r = ${validation.jj_cluster_correlation_r.toFixed(2)}`
-                : "unavailable";
+        const r = validation[keys.correlation];
+        rEl.textContent = r !== null && r !== undefined ? `r = ${r.toFixed(2)}` : "unavailable";
     }
 
-    document.getElementById("jj-cluster-meta").textContent = validation.total_jj_clusters_matched
-        ? `${validation.total_jj_clusters_matched} JJ clusters matched to ${validation.wards_with_jj_clusters} of ${wards.length} wards`
-        : "";
+    const metaEl = document.getElementById(metaElId);
+    if (metaEl) {
+        metaEl.textContent = validation[keys.total]
+            ? `${validation[keys.total]} ${CITY.complementaryLabel.toLowerCase()} features matched to ${validation[keys.wards]} of ${wards.length} ${CITY.wardLabel.toLowerCase()}s`
+            : "";
+    }
 
     const points = wards
-        .filter((w) => w.vulnerability_score !== null && w.jj_household_density_km2 !== null && w.jj_household_density_km2 !== undefined)
-        .map((w) => ({ x: w.vulnerability_score, y: w.jj_household_density_km2, name: w.ward_name }));
+        .filter((w) => w.vulnerability_score !== null && w[keys.density] !== null && w[keys.density] !== undefined)
+        .map((w) => ({ x: w.vulnerability_score, y: w[keys.density], name: w.ward_name }));
 
-    new Chart(document.getElementById("jj-cluster-scatter-chart"), {
+    const canvas = document.getElementById(chartElId);
+    if (!canvas) return;
+    new Chart(canvas, {
         type: "scatter",
         data: {
             datasets: [
                 {
-                    label: "Wards",
+                    label: `${CITY.wardLabel}s`,
                     data: points,
-                    backgroundColor: "rgba(139,69,19,0.55)",
+                    backgroundColor: CITY.complementaryFillColor,
                     pointRadius: 4,
                 },
             ],
@@ -149,13 +192,13 @@ function renderJJClusterSection(data) {
                 legend: { display: false },
                 tooltip: {
                     callbacks: {
-                        label: (ctx) => `${ctx.raw.name}: score ${ctx.raw.x.toFixed(1)}, JJ household density ${Math.round(ctx.raw.y).toLocaleString()}/km²`,
+                        label: (ctx) => `${ctx.raw.name}: score ${ctx.raw.x.toFixed(1)}, density ${Math.round(ctx.raw.y).toLocaleString()}/km²`,
                     },
                 },
             },
             scales: {
                 x: { title: { display: true, text: "Vulnerability score" } },
-                y: { title: { display: true, text: "JJ-cluster household density (/km²)" } },
+                y: { title: { display: true, text: `${CITY.complementaryLabel} density (/km²)` } },
             },
         },
     });
@@ -166,14 +209,14 @@ async function loadLongTermTrends(landCoverColors) {
     let historical = null;
 
     try {
-        const res = await fetch("timeseries_scenes.json", { cache: "no-store" });
+        const res = await fetch(cityDataPath("timeseries_scenes.json"), { cache: "no-store" });
         timeseries = await res.json();
     } catch (err) {
         console.error("Failed to load timeseries_scenes.json", err);
     }
 
     try {
-        const res = await fetch("historical_trends.json", { cache: "no-store" });
+        const res = await fetch(cityDataPath("historical_trends.json"), { cache: "no-store" });
         historical = await res.json();
     } catch (err) {
         console.error("Failed to load historical_trends.json", err);
@@ -282,8 +325,8 @@ function renderSummary(analytics) {
     const corr = analytics.correlation;
 
     el.innerHTML = [
-        statCard("Hottest District (Air UHI)", hottest.name, `+${fmt(hottest.uhi_air_c)}°C above city mean`, "accent-hot"),
-        statCard("Coolest District (Air UHI)", coolest.name, `${fmt(coolest.uhi_air_c)}°C vs city mean`, "accent-cool"),
+        statCard(`Hottest ${CITY.districtLabel} (Air UHI)`, hottest.name, `+${fmt(hottest.uhi_air_c)}°C above city mean`, "accent-hot"),
+        statCard(`Coolest ${CITY.districtLabel} (Air UHI)`, coolest.name, `${fmt(coolest.uhi_air_c)}°C vs city mean`, "accent-cool"),
         statCard("Citywide Mean Air Temp", `${fmt(analytics.citywide_air_temp_c)}°C`, "NASA POWER, rolling window"),
         statCard("Cropland Baseline LST", `${fmt(analytics.cropland_baseline_lst_c)}°C`, "ESA WorldCover class 40"),
         statCard(

@@ -29,7 +29,9 @@ def repair_shapely_geometry(geom):
     return fixed.simplify(0.0001, preserve_topology=True)
 
 
-def load_delhi_geometry_from_geojson(path: str) -> ee.Geometry:
+def load_geometry_from_geojson(path: str) -> ee.Geometry:
+    """City-agnostic: repairs and merges every feature in the given admin
+    boundary file into one ee.Geometry."""
     gdf = gpd.read_file(path)
     gdf["geometry"] = gdf["geometry"].apply(repair_shapely_geometry)
     merged = repair_shapely_geometry(gdf.union_all())
@@ -115,44 +117,51 @@ def get_landsat8_collection(start_date: str, end_date: str, geom: ee.Geometry) -
     )
 
 
-def load_region(workspace: str) -> ee.Geometry:
-    geojson_path = os.path.join(workspace, "delhi_admin.geojson")
+def load_region(workspace: str, city: dict) -> ee.Geometry:
+    geojson_path = os.path.join(workspace, city["region_geojson"])
     try:
-        region = load_delhi_geometry_from_geojson(geojson_path)
+        region = load_geometry_from_geojson(geojson_path)
         # Force a lightweight server validation so invalid geometries fail here.
         _ = region.area(1).getInfo()
-        print("Using local geometry: delhi_admin.geojson")
+        print(f"[{city['slug']}] Using local geometry: {city['region_geojson']}")
         return region
     except Exception as exc:
-        print(f"Local GeoJSON geometry invalid or unavailable: {exc}")
-    try:
-        region = load_delhi_geometry_from_ee()
-        _ = region.area(1).getInfo()
-        print("Using fallback geometry: FAO/GAUL_SIMPLIFIED_500m/2015/level1 (Delhi)")
-        return region
-    except Exception as ee_exc:
-        print(f"EE Delhi geometry fallback failed: {ee_exc}")
-        print("Using final fallback geometry: Delhi rectangle")
-        return ee.Geometry.Rectangle([76.8388, 28.4044, 77.3465, 28.8833])
+        print(f"[{city['slug']}] Local GeoJSON geometry invalid or unavailable: {exc}")
+
+    ee_fallback_fn = city.get("ee_fallback_fn")
+    if ee_fallback_fn:
+        try:
+            region = ee_fallback_fn()
+            _ = region.area(1).getInfo()
+            print(f"[{city['slug']}] Using EE fallback geometry")
+            return region
+        except Exception as ee_exc:
+            print(f"[{city['slug']}] EE geometry fallback failed: {ee_exc}")
+
+    print(f"[{city['slug']}] Using final fallback geometry: bounding rectangle")
+    return ee.Geometry.Rectangle(city["bbox_fallback"])
 
 
-def load_district_features(workspace: str) -> list:
-    """Per-district (name, ee.Geometry) pairs from delhi_admin.geojson's 11 features.
+def load_district_features(workspace: str, city: dict) -> list:
+    """Per-district (name, ee.Geometry) pairs from the city's district
+    boundary file.
 
-    Uses the same shapely repair as load_delhi_geometry_from_geojson() so
-    these polygons are the exact same source geometry drawn as the district
+    Uses the same shapely repair as load_geometry_from_geojson() so these
+    polygons are the exact same source geometry drawn as the district
     boundary lines on the map — not a different fallback boundary — so
     raster clipping and the vector overlay line up. A buffered point around
-    the district's known centroid (DISTRICT_LOCATIONS) is a last-resort
-    fallback if repair genuinely can't fix a given polygon.
+    the district's known centroid (city["district_locations"]) is a
+    last-resort fallback if repair genuinely can't fix a given polygon.
     """
-    geojson_path = os.path.join(workspace, "delhi_admin.geojson")
+    geojson_path = os.path.join(workspace, city["district_geojson"])
     gdf = gpd.read_file(geojson_path)
-    name_col = "District" if "District" in gdf.columns else "Name"
+    name_col = city["district_name_col"]
+    title_case = city.get("district_name_title_case", False)
 
     districts = []
     for _, row in gdf.iterrows():
-        name = str(row[name_col]).title() if name_col in row and row[name_col] else "Unknown"
+        raw_name = row[name_col] if name_col in row and row[name_col] else "Unknown"
+        name = str(raw_name).title() if title_case else str(raw_name)
 
         geom = None
         try:
@@ -162,7 +171,7 @@ def load_district_features(workspace: str) -> list:
             geom = candidate
         except Exception as exc:
             print(f"District polygon invalid for {name} even after repair, using buffered centroid fallback: {exc}")
-            loc = next((d for d in DISTRICT_LOCATIONS if d["name"] == name), None)
+            loc = next((d for d in city["district_locations"] if d["name"] == name), None)
             if loc:
                 geom = ee.Geometry.Point([loc["lon"], loc["lat"]]).buffer(3000)
 
@@ -172,43 +181,58 @@ def load_district_features(workspace: str) -> list:
     return districts
 
 
-def load_ward_features(workspace: str) -> ee.FeatureCollection:
-    """Single batched FeatureCollection of Delhi's 290 wards (pre-2022
-    delimitation — see README for provenance/license), keyed by the file's
-    unique Ward_No property. Built as one FeatureCollection rather than a
+def load_ward_features(workspace: str, city: dict) -> ee.FeatureCollection:
+    """Single batched FeatureCollection of the city's wards, keyed by a
+    unique ward_no property. Built as one FeatureCollection rather than a
     Python list of per-ward ee.Geometry (contrast load_district_features)
     so build_ward_vulnerability_dataset can run zonal stats via reduceRegions
-    in a couple of batched server-side calls instead of ~290 sequential ones.
-    delhi_wards.geojson was verified clean (no Z-coordinates, all valid
-    polygons) at import time, so unlike load_district_features there is no
-    per-feature forced-validation round trip here — that would defeat the
-    point of batching.
+    in a couple of batched server-side calls instead of hundreds of
+    sequential ones. Both cities' ward files were verified clean (no
+    Z-coordinates, all valid polygons) at import time, so unlike
+    load_district_features there is no per-feature forced-validation round
+    trip here — that would defeat the point of batching.
     """
-    geojson_path = os.path.join(workspace, "delhi_wards.geojson")
+    geojson_path = os.path.join(workspace, city["ward_geojson"])
     gdf = gpd.read_file(geojson_path)
+    name_col = city["ward_name_col"]
+    no_col = city["ward_no_col"]
+    title_case = city.get("ward_name_title_case", False)
 
     features = []
     for _, row in gdf.iterrows():
         try:
             geom = shapely_geom_to_ee(repair_shapely_geometry(row.geometry))
         except Exception as exc:
-            print(f"Ward polygon invalid for {row.get('Ward_Name')}, skipping: {exc}")
+            print(f"Ward polygon invalid for {row.get(name_col)}, skipping: {exc}")
             continue
+        raw_name = str(row.get(name_col) or "Unknown")
         features.append(
             ee.Feature(
                 geom,
                 {
-                    "ward_name": str(row.get("Ward_Name") or "Unknown").title(),
-                    "ward_no": str(row.get("Ward_No") or ""),
+                    "ward_name": raw_name.title() if title_case else raw_name,
+                    "ward_no": str(row.get(no_col) or ""),
                 },
             )
         )
     return ee.FeatureCollection(features)
 
 
+def compute_centroids_from_geojson(path: str, name_col: str) -> list:
+    """Geometric centroid per feature, keyed by name_col. Used for cities
+    without a hand-curated centroid list (only Delhi's DISTRICT_LOCATIONS is
+    hand-curated, and is kept exactly as-is for that reason)."""
+    gdf = gpd.read_file(path)
+    locations = []
+    for _, row in gdf.iterrows():
+        c = row.geometry.centroid
+        locations.append({"name": str(row[name_col]), "lat": c.y, "lon": c.x})
+    return locations
+
+
 # Same 11 district centroids used by the weather markers (names match
 # load_district_features()'s .title()-cased "District" property exactly).
-DISTRICT_LOCATIONS = [
+DELHI_DISTRICT_LOCATIONS = [
     {"name": "Central", "lat": 28.6422, "lon": 77.2183},
     {"name": "East", "lat": 28.6261, "lon": 77.3006},
     {"name": "New Delhi", "lat": 28.6107, "lon": 77.2193},
@@ -257,11 +281,30 @@ def pearson_correlation(xs: list, ys: list):
     return cov / denom
 
 
-def heat_alert(temp_c: float) -> dict:
+def heat_alert_imd(temp_c: float, feels_like_c: float = None) -> dict:
+    """Simplified proxy for IMD's Heat Wave criteria, based on current
+    temperature (see README for how this differs from IMD's official,
+    departure-from-normal-based definition)."""
     if temp_c >= 40:
         return {"level": "extreme", "label": "🔥 Extreme Heat Alert"}
     if temp_c >= 35:
         return {"level": "high", "label": "⚠️ High Heat Warning"}
+    return {"level": "normal", "label": "🌤️ Normal Temperature"}
+
+
+def heat_alert_dwd(temp_c: float, feels_like_c: float = None) -> dict:
+    """Proxy for DWD's Hitzewarnung system. DWD's real criteria use a
+    humidity/wind/solar-adjusted "felt temperature" from the Klima-Michel
+    model: strong heat stress (Level 1) at a felt temperature >=32C for 2+
+    consecutive days, extreme heat stress (Level 3) at >=38C. This script
+    doesn't have the inputs for the full Klima-Michel model, so it uses
+    OpenWeather's own feels_like value as a documented proxy for DWD's felt
+    temperature — not a reimplementation of DWD's official model."""
+    basis = feels_like_c if feels_like_c is not None else temp_c
+    if basis >= 38:
+        return {"level": "extreme", "label": "🔥 Extreme Heat Stress (DWD-threshold proxy)"}
+    if basis >= 32:
+        return {"level": "high", "label": "⚠️ Strong Heat Stress (DWD-threshold proxy)"}
     return {"level": "normal", "label": "🌤️ Normal Temperature"}
 
 
@@ -434,6 +477,7 @@ def build_district_analytics_dataset(
     lst_image: ee.Image,
     ndvi_image: ee.Image,
     composite_collection: ee.ImageCollection,
+    district_locations: list,
 ) -> dict:
     air_temp_days = int(os.environ.get("ANALYTICS_AIR_TEMP_DAYS", "90"))
     air_end_dt = datetime.utcnow().date()
@@ -443,7 +487,7 @@ def build_district_analytics_dataset(
 
     district_rows = []
     for name, geom in district_features:
-        loc = next((d for d in DISTRICT_LOCATIONS if d["name"] == name), None)
+        loc = next((d for d in district_locations if d["name"] == name), None)
         lat = loc["lat"] if loc else None
         lon = loc["lon"] if loc else None
 
@@ -634,33 +678,37 @@ def _minmax_normalizer(values: list, invert: bool = False):
     return norm
 
 
-def load_jj_cluster_ward_aggregates(workspace: str) -> dict:
-    """Spatial-joins DUSIB JJ (Jhuggi-Jhopri, i.e. informal settlement)
-    cluster centroids into Delhi's 290 wards, returning per-ward aggregate
-    counts/households keyed by ward_no (the same key used throughout
-    ward_vulnerability.json). A spatial join (centroid-in-polygon) is used
-    rather than the source data's own WARD_NO attribute because ~4% of
-    clusters (Cantonment/NDMC rows) don't carry a usable ward code there,
-    while their geometry still falls cleanly inside a real ward polygon.
+def load_point_features_ward_aggregates(
+    workspace: str, ward_geojson: str, ward_no_col: str, points_geojson: str, value_field: str
+) -> dict:
+    """Generic spatial join: a small-polygon-or-point feature layer (with a
+    numeric value_field) joined to ward polygons by centroid-in-polygon,
+    returning {ward_no: {"count": N, "value_sum": X}}. A spatial join is used
+    rather than any ward-code attribute the source data might carry, since
+    that attribute is missing/unusable for some real-world source rows (e.g.
+    Delhi's Cantonment/NDMC JJ cluster rows) while the geometry itself still
+    resolves cleanly. Used for Delhi's JJ cluster polygons (centroid derived)
+    and Münster's Zensus population-grid points (already centroids, taking
+    the centroid of a Point is the point itself, so this works unmodified).
     """
-    wards_gdf = gpd.read_file(os.path.join(workspace, "delhi_wards.geojson"))
-    clusters_gdf = gpd.read_file(os.path.join(workspace, "delhi_jj_clusters.geojson"))
+    wards_gdf = gpd.read_file(os.path.join(workspace, ward_geojson))
+    points_gdf = gpd.read_file(os.path.join(workspace, points_geojson))
 
-    centroids_gdf = clusters_gdf.copy()
+    centroids_gdf = points_gdf.copy()
     centroids_gdf["geometry"] = centroids_gdf.geometry.centroid
 
     joined = gpd.sjoin(
-        centroids_gdf, wards_gdf[["Ward_No", "geometry"]], how="inner", predicate="within"
+        centroids_gdf, wards_gdf[[ward_no_col, "geometry"]], how="inner", predicate="within"
     )
 
     aggregates: dict = {}
     for _, row in joined.iterrows():
-        ward_no = str(row["Ward_No"])
-        entry = aggregates.setdefault(ward_no, {"jj_cluster_count": 0, "jj_cluster_households": 0})
-        entry["jj_cluster_count"] += 1
-        households = row.get("approx_households")
-        if households:
-            entry["jj_cluster_households"] += int(households)
+        ward_no = str(row[ward_no_col])
+        entry = aggregates.setdefault(ward_no, {"count": 0, "value_sum": 0})
+        entry["count"] += 1
+        value = row.get(value_field)
+        if value:
+            entry["value_sum"] += float(value)
     return aggregates
 
 
@@ -670,13 +718,21 @@ def build_ward_vulnerability_dataset(
     lst_image: ee.Image,
     ndvi_image: ee.Image,
     workspace: str,
+    city: dict,
 ) -> dict:
     """Ward-resolution LST/NDVI/population — the inputs that are genuinely
     fine-grained at the satellite/gridded-population level. Air temperature
     deliberately stays district-level only (build_district_analytics_dataset):
     NASA POWER's ~50km grid and OpenWeather's station data don't carry real
-    per-ward signal across a city Delhi's size, so computing them per-ward
+    per-ward signal across a city this size, so computing them per-ward
     would be false precision, not more information.
+
+    Also joins a per-city "complementary layer" (Delhi: JJ informal-
+    settlement clusters; Münster: Zensus 2022 elderly-population grid) and
+    computes a citywide correlation between it and the vulnerability score,
+    as an independent sanity check — not a score input. Output field names
+    for that layer come from city["complementary"], so Delhi's existing
+    field names (jj_cluster_count etc.) are preserved exactly.
     """
     ward_fc = ward_fc.map(lambda f: f.set("area_km2", f.geometry().area(1).divide(1e6)))
 
@@ -687,7 +743,7 @@ def build_ward_vulnerability_dataset(
 
     worldpop = (
         ee.ImageCollection("WorldPop/GP/100m/pop")
-        .filter(ee.Filter.eq("country", "IND"))
+        .filter(ee.Filter.eq("country", city["worldpop_country_code"]))
         .sort("year", False)
         .first()
     )
@@ -703,7 +759,10 @@ def build_ward_vulnerability_dataset(
     # unlike mean() (used above), which keeps the band name ("LST"/"NDVI").
     pop_by_ward = {f["properties"].get("ward_no"): f["properties"].get("sum") for f in pop_rows}
 
-    jj_by_ward = load_jj_cluster_ward_aggregates(workspace)
+    comp_cfg = city["complementary"]
+    comp_by_ward = load_point_features_ward_aggregates(
+        workspace, city["ward_geojson"], city["ward_no_col"], comp_cfg["geojson_path"], comp_cfg["value_field"]
+    )
 
     wards = []
     for feat in lst_ndvi_rows:
@@ -714,22 +773,21 @@ def build_ward_vulnerability_dataset(
         population_density_km2 = (
             population / area_km2 if population is not None and area_km2 else None
         )
-        jj = jj_by_ward.get(ward_no, {"jj_cluster_count": 0, "jj_cluster_households": 0})
-        jj_household_density_km2 = jj["jj_cluster_households"] / area_km2 if area_km2 else None
-        wards.append(
-            {
-                "ward_name": props.get("ward_name"),
-                "ward_no": ward_no,
-                "mean_lst_c": props.get("LST"),
-                "mean_ndvi": props.get("NDVI"),
-                "area_km2": area_km2,
-                "population": population,
-                "population_density_km2": population_density_km2,
-                "jj_cluster_count": jj["jj_cluster_count"],
-                "jj_cluster_households": jj["jj_cluster_households"],
-                "jj_household_density_km2": jj_household_density_km2,
-            }
-        )
+        comp = comp_by_ward.get(ward_no, {"count": 0, "value_sum": 0})
+        comp_density_km2 = comp["value_sum"] / area_km2 if area_km2 else None
+        ward_row = {
+            "ward_name": props.get("ward_name"),
+            "ward_no": ward_no,
+            "mean_lst_c": props.get("LST"),
+            "mean_ndvi": props.get("NDVI"),
+            "area_km2": area_km2,
+            "population": population,
+            "population_density_km2": population_density_km2,
+            comp_cfg["count_key"]: comp["count"],
+            comp_cfg["sum_key"]: comp["value_sum"],
+            comp_cfg["density_key"]: comp_density_km2,
+        }
+        wards.append(ward_row)
 
     lst_norm = _minmax_normalizer([w["mean_lst_c"] for w in wards])
     ndvi_norm = _minmax_normalizer([w["mean_ndvi"] for w in wards], invert=True)
@@ -750,31 +808,23 @@ def build_ward_vulnerability_dataset(
         reverse=True,
     )
 
-    jj_validation_pairs = [
-        (w["vulnerability_score"], w["jj_household_density_km2"])
+    validation_pairs = [
+        (w["vulnerability_score"], w[comp_cfg["density_key"]])
         for w in wards
-        if w["vulnerability_score"] is not None and w["jj_household_density_km2"] is not None
+        if w["vulnerability_score"] is not None and w[comp_cfg["density_key"]] is not None
     ]
-    jj_cluster_correlation_r = (
-        pearson_correlation([p[0] for p in jj_validation_pairs], [p[1] for p in jj_validation_pairs])
-        if len(jj_validation_pairs) > 10
+    correlation_r = (
+        pearson_correlation([p[0] for p in validation_pairs], [p[1] for p in validation_pairs])
+        if len(validation_pairs) > 10
         else None
     )
-    wards_with_jj_clusters = sum(1 for w in wards if w["jj_cluster_count"] > 0)
-    total_jj_clusters_matched = sum(w["jj_cluster_count"] for w in wards)
+    wards_with_feature = sum(1 for w in wards if w[comp_cfg["count_key"]] > 0)
+    total_features_matched = sum(w[comp_cfg["count_key"]] for w in wards)
 
     return {
         "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "population_year": population_year,
-        "source_note": (
-            "Ward boundaries: datameet/Municipal_Spatial_Data (CC-BY-SA 2.5 India), "
-            "pre-2022 delimitation (erstwhile North/South/East Delhi Municipal "
-            "Corporations + NDMC + Delhi Cantonment). Population: WorldPop 100m "
-            "(CC-BY 4.0). Vulnerability score = average of min-max normalized LST, "
-            "inverse-normalized NDVI, and normalized population density (0-100, "
-            "higher = more vulnerable). Air temperature is not part of this score "
-            "and remains district-level only — see district_analytics.json."
-        ),
+        "source_note": city["ward_source_note"],
         "wards": wards,
         "ranking": [
             {
@@ -786,24 +836,16 @@ def build_ward_vulnerability_dataset(
                     "mean_ndvi",
                     "population_density_km2",
                     "vulnerability_score",
-                    "jj_cluster_count",
+                    comp_cfg["count_key"],
                 )
             }
             for w in ranked[:20]
         ],
         "validation": {
-            "jj_cluster_correlation_r": jj_cluster_correlation_r,
-            "wards_with_jj_clusters": wards_with_jj_clusters,
-            "total_jj_clusters_matched": total_jj_clusters_matched,
-            "source_note": (
-                "DUSIB (Delhi Urban Shelter Improvement Board) JJ cluster boundaries, "
-                "via yashveeeeeeer/india-geodata (CC0). 685 mapped clusters, "
-                "spatially joined to wards by cluster centroid. This correlation is a "
-                "sanity check on the exposure-only vulnerability score above — not a "
-                "score input, and not proof of causation. The DUSIB list reflects "
-                "officially recognized/mapped clusters as of its last update, not "
-                "necessarily every informal settlement in Delhi."
-            ),
+            comp_cfg["correlation_key"]: correlation_r,
+            comp_cfg["wards_key"]: wards_with_feature,
+            comp_cfg["total_key"]: total_features_matched,
+            "source_note": comp_cfg["source_note"],
         },
     }
 
@@ -896,13 +938,14 @@ def build_historical_trends_dataset(region: ee.Geometry) -> dict:
     }
 
 
-def build_weather_dataset() -> dict:
+def build_weather_dataset(city: dict) -> dict:
     api_key = os.environ.get("OPENWEATHER_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("Missing required env var: OPENWEATHER_API_KEY")
 
+    heat_alert_fn = city["heat_alert_fn"]
     districts = []
-    for loc in DISTRICT_LOCATIONS:
+    for loc in city["district_locations"]:
         url = (
             "https://api.openweathermap.org/data/2.5/weather"
             f"?lat={loc['lat']}&lon={loc['lon']}&appid={api_key}&units=metric"
@@ -912,14 +955,15 @@ def build_weather_dataset() -> dict:
             response.raise_for_status()
             payload = response.json()
             temp_c = payload["main"]["temp"]
-            alert = heat_alert(temp_c)
+            feels_like_c = payload["main"]["feels_like"]
+            alert = heat_alert_fn(temp_c, feels_like_c)
             districts.append(
                 {
                     "name": loc["name"],
                     "lat": loc["lat"],
                     "lon": loc["lon"],
                     "temp_c": temp_c,
-                    "feels_like_c": payload["main"]["feels_like"],
+                    "feels_like_c": feels_like_c,
                     "humidity": payload["main"]["humidity"],
                     "heat_alert_level": alert["level"],
                     "heat_alert_label": alert["label"],
@@ -934,78 +978,183 @@ def build_weather_dataset() -> dict:
     }
 
 
+def get_city_configs(workspace: str) -> list:
+    """One entry per supported city. Delhi's file names/columns/values are
+    unchanged from before multi-city support; Münster is new. See README for
+    full data-source citations."""
+    delhi = {
+        "slug": "delhi",
+        "display_name": "Delhi",
+        "region_geojson": "delhi_admin.geojson",
+        "ee_fallback_fn": load_delhi_geometry_from_ee,
+        "bbox_fallback": [76.8388, 28.4044, 77.3465, 28.8833],
+        "district_geojson": "delhi_admin.geojson",
+        "district_name_col": "District",
+        "district_name_title_case": True,
+        "district_locations": DELHI_DISTRICT_LOCATIONS,
+        "ward_geojson": "delhi_wards.geojson",
+        "ward_name_col": "Ward_Name",
+        "ward_no_col": "Ward_No",
+        "ward_name_title_case": True,
+        "worldpop_country_code": "IND",
+        "heat_alert_fn": heat_alert_imd,
+        "ward_source_note": (
+            "Ward boundaries: datameet/Municipal_Spatial_Data (CC-BY-SA 2.5 India), "
+            "pre-2022 delimitation (erstwhile North/South/East Delhi Municipal "
+            "Corporations + NDMC + Delhi Cantonment). Population: WorldPop 100m "
+            "(CC-BY 4.0). Vulnerability score = average of min-max normalized LST, "
+            "inverse-normalized NDVI, and normalized population density (0-100, "
+            "higher = more vulnerable). Air temperature is not part of this score "
+            "and remains district-level only — see district_analytics.json."
+        ),
+        "complementary": {
+            "geojson_path": "delhi_jj_clusters.geojson",
+            "value_field": "approx_households",
+            "count_key": "jj_cluster_count",
+            "sum_key": "jj_cluster_households",
+            "density_key": "jj_household_density_km2",
+            "correlation_key": "jj_cluster_correlation_r",
+            "wards_key": "wards_with_jj_clusters",
+            "total_key": "total_jj_clusters_matched",
+            "source_note": (
+                "DUSIB (Delhi Urban Shelter Improvement Board) JJ cluster boundaries, "
+                "via yashveeeeeeer/india-geodata (CC0). 685 mapped clusters, "
+                "spatially joined to wards by cluster centroid. This correlation is a "
+                "sanity check on the exposure-only vulnerability score above — not a "
+                "score input, and not proof of causation. The DUSIB list reflects "
+                "officially recognized/mapped clusters as of its last update, not "
+                "necessarily every informal settlement in Delhi."
+            ),
+        },
+    }
+
+    muenster_districts_path = os.path.join(workspace, "muenster_districts.geojson")
+    muenster = {
+        "slug": "muenster",
+        "display_name": "Münster",
+        "region_geojson": "muenster_districts.geojson",
+        "ee_fallback_fn": None,
+        "bbox_fallback": [7.45, 51.82, 7.80, 52.08],
+        "district_geojson": "muenster_districts.geojson",
+        "district_name_col": "district_name",
+        "district_name_title_case": False,
+        "district_locations": compute_centroids_from_geojson(muenster_districts_path, "district_name"),
+        "ward_geojson": "muenster_wards.geojson",
+        "ward_name_col": "ward_name",
+        "ward_no_col": "ward_no",
+        "ward_name_title_case": False,
+        "worldpop_country_code": "DEU",
+        "heat_alert_fn": heat_alert_dwd,
+        "ward_source_note": (
+            "Ward boundaries (Statistische Bezirke): Stadt Münster Open Data Portal "
+            "(opendata.stadt-muenster.de). Population: WorldPop 100m (CC-BY 4.0). "
+            "Vulnerability score = average of min-max normalized LST, inverse-normalized "
+            "NDVI, and normalized population density (0-100, higher = more vulnerable). "
+            "Air temperature is not part of this score and remains district-level only."
+        ),
+        "complementary": {
+            "geojson_path": "muenster_elderly_population.geojson",
+            "value_field": "elderly_population",
+            "count_key": "elderly_grid_cell_count",
+            "sum_key": "elderly_population",
+            "density_key": "elderly_density_km2",
+            "correlation_key": "elderly_correlation_r",
+            "wards_key": "wards_with_elderly_data",
+            "total_key": "total_elderly_grid_cells_matched",
+            "source_note": (
+                "Zensus 2022 (Destatis), 100m INSPIRE population grid, ages 65+, "
+                "clipped to Münster and spatially joined to wards by grid-cell "
+                "centroid. Small-count cells are suppressed by German federal "
+                "statistical disclosure control and treated as 0 here, so true "
+                "elderly counts in sparsely populated cells are underestimated. "
+                "This correlation is a sanity check on the exposure-only "
+                "vulnerability score above — not a score input, and not proof "
+                "of causation."
+            ),
+        },
+    }
+
+    return [delhi, muenster]
+
+
 def main() -> None:
     init_ee()
 
     workspace = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    region = load_region(workspace)
+    cities = get_city_configs(workspace)
 
-    out_dir = os.path.join(workspace, "backend-data")
-    os.makedirs(out_dir, exist_ok=True)
+    for city in cities:
+        slug = city["slug"]
+        print(f"=== Precomputing for {city['display_name']} ({slug}) ===")
 
-    timeseries_output = build_timeseries_dataset(region)
-    with open(os.path.join(out_dir, "timeseries_scenes.json"), "w", encoding="utf-8") as f:
-        json.dump(timeseries_output, f, ensure_ascii=True)
-    print(f"Wrote {len(timeseries_output['records'])} records to backend-data/timeseries_scenes.json")
+        out_dir = os.path.join(workspace, "backend-data", slug)
+        os.makedirs(out_dir, exist_ok=True)
 
-    # Build the rolling-window composite once; map layers and district analytics share it.
-    window_days = int(os.environ.get("MAP_COMPOSITE_DAYS", "45"))
-    composite_end = datetime.utcnow().date()
-    composite_start = composite_end - timedelta(days=window_days)
-    composite_collection = get_landsat8_collection(
-        composite_start.isoformat(), composite_end.isoformat(), region
-    )
-    lst_image = composite_collection.select("LST").median()
-    ndvi_image = composite_collection.select("NDVI").median()
+        region = load_region(workspace, city)
 
-    try:
-        map_layers_output = build_map_layers_dataset(
-            region, lst_image, ndvi_image, composite_start, composite_end
+        timeseries_output = build_timeseries_dataset(region)
+        with open(os.path.join(out_dir, "timeseries_scenes.json"), "w", encoding="utf-8") as f:
+            json.dump(timeseries_output, f, ensure_ascii=True)
+        print(f"[{slug}] Wrote {len(timeseries_output['records'])} records to timeseries_scenes.json")
+
+        # Build the rolling-window composite once; map layers and district analytics share it.
+        window_days = int(os.environ.get("MAP_COMPOSITE_DAYS", "45"))
+        composite_end = datetime.utcnow().date()
+        composite_start = composite_end - timedelta(days=window_days)
+        composite_collection = get_landsat8_collection(
+            composite_start.isoformat(), composite_end.isoformat(), region
         )
-        with open(os.path.join(out_dir, "map_layers.json"), "w", encoding="utf-8") as f:
-            json.dump(map_layers_output, f, ensure_ascii=True)
-        print("Wrote backend-data/map_layers.json")
-    except Exception as exc:
-        print(f"Map layer precompute failed, leaving previous map_layers.json in place if any: {exc}")
+        lst_image = composite_collection.select("LST").median()
+        ndvi_image = composite_collection.select("NDVI").median()
 
-    try:
-        district_features = load_district_features(workspace)
-        analytics_output = build_district_analytics_dataset(
-            region, district_features, lst_image, ndvi_image, composite_collection
-        )
-        with open(os.path.join(out_dir, "district_analytics.json"), "w", encoding="utf-8") as f:
-            json.dump(analytics_output, f, ensure_ascii=True)
-        print(f"Wrote district_analytics.json for {len(analytics_output['districts'])} districts")
-    except Exception as exc:
-        print(f"District analytics precompute failed, leaving previous district_analytics.json in place if any: {exc}")
-
-    try:
-        ward_fc = load_ward_features(workspace)
-        ward_output = build_ward_vulnerability_dataset(region, ward_fc, lst_image, ndvi_image, workspace)
-        with open(os.path.join(out_dir, "ward_vulnerability.json"), "w", encoding="utf-8") as f:
-            json.dump(ward_output, f, ensure_ascii=True)
-        print(f"Wrote ward_vulnerability.json for {len(ward_output['wards'])} wards")
-    except Exception as exc:
-        print(f"Ward vulnerability precompute failed, leaving previous ward_vulnerability.json in place if any: {exc}")
-
-    if should_run_weekly_job():
         try:
-            historical_output = build_historical_trends_dataset(region)
-            with open(os.path.join(out_dir, "historical_trends.json"), "w", encoding="utf-8") as f:
-                json.dump(historical_output, f, ensure_ascii=True)
-            print(f"Wrote historical_trends.json ({len(historical_output['monthly_land_cover_lst'])} rows)")
+            map_layers_output = build_map_layers_dataset(
+                region, lst_image, ndvi_image, composite_start, composite_end
+            )
+            with open(os.path.join(out_dir, "map_layers.json"), "w", encoding="utf-8") as f:
+                json.dump(map_layers_output, f, ensure_ascii=True)
+            print(f"[{slug}] Wrote map_layers.json")
         except Exception as exc:
-            print(f"Historical trends precompute failed, leaving previous historical_trends.json in place if any: {exc}")
-    else:
-        print("Skipping historical_trends.json this run (weekly job, seeded copy from previous publish stays in place)")
+            print(f"[{slug}] Map layer precompute failed, leaving previous map_layers.json in place if any: {exc}")
 
-    try:
-        weather_output = build_weather_dataset()
-        with open(os.path.join(out_dir, "weather.json"), "w", encoding="utf-8") as f:
-            json.dump(weather_output, f, ensure_ascii=True)
-        print(f"Wrote weather.json for {len(weather_output['districts'])} districts")
-    except Exception as exc:
-        print(f"Weather precompute failed, leaving previous weather.json in place if any: {exc}")
+        try:
+            district_features = load_district_features(workspace, city)
+            analytics_output = build_district_analytics_dataset(
+                region, district_features, lst_image, ndvi_image, composite_collection, city["district_locations"]
+            )
+            with open(os.path.join(out_dir, "district_analytics.json"), "w", encoding="utf-8") as f:
+                json.dump(analytics_output, f, ensure_ascii=True)
+            print(f"[{slug}] Wrote district_analytics.json for {len(analytics_output['districts'])} districts")
+        except Exception as exc:
+            print(f"[{slug}] District analytics precompute failed, leaving previous district_analytics.json in place if any: {exc}")
+
+        try:
+            ward_fc = load_ward_features(workspace, city)
+            ward_output = build_ward_vulnerability_dataset(region, ward_fc, lst_image, ndvi_image, workspace, city)
+            with open(os.path.join(out_dir, "ward_vulnerability.json"), "w", encoding="utf-8") as f:
+                json.dump(ward_output, f, ensure_ascii=True)
+            print(f"[{slug}] Wrote ward_vulnerability.json for {len(ward_output['wards'])} wards")
+        except Exception as exc:
+            print(f"[{slug}] Ward vulnerability precompute failed, leaving previous ward_vulnerability.json in place if any: {exc}")
+
+        if should_run_weekly_job():
+            try:
+                historical_output = build_historical_trends_dataset(region)
+                with open(os.path.join(out_dir, "historical_trends.json"), "w", encoding="utf-8") as f:
+                    json.dump(historical_output, f, ensure_ascii=True)
+                print(f"[{slug}] Wrote historical_trends.json ({len(historical_output['monthly_land_cover_lst'])} rows)")
+            except Exception as exc:
+                print(f"[{slug}] Historical trends precompute failed, leaving previous historical_trends.json in place if any: {exc}")
+        else:
+            print(f"[{slug}] Skipping historical_trends.json this run (weekly job, seeded copy from previous publish stays in place)")
+
+        try:
+            weather_output = build_weather_dataset(city)
+            with open(os.path.join(out_dir, "weather.json"), "w", encoding="utf-8") as f:
+                json.dump(weather_output, f, ensure_ascii=True)
+            print(f"[{slug}] Wrote weather.json for {len(weather_output['districts'])} districts")
+        except Exception as exc:
+            print(f"[{slug}] Weather precompute failed, leaving previous weather.json in place if any: {exc}")
 
 
 if __name__ == "__main__":

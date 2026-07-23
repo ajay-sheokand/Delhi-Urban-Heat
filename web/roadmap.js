@@ -18,10 +18,22 @@ function showErrorBanner(message) {
     container.appendChild(div);
 }
 
+function applyCityChrome() {
+    document.getElementById("page-title").textContent = `Roadmap | ${CITY.displayName} Urban Heat Monitor`;
+    document.getElementById("site-brand").textContent = `🌡️ ${CITY.displayName} Urban Heat Monitor`;
+    document.getElementById("page-intro").textContent =
+        `Every optical satellite used on this site — Landsat 8, Sentinel-2 — is blind through cloud cover. The numbers below are computed directly from this project's own Landsat record, not a hypothetical: they show how often that actually happens over ${CITY.displayName}.`;
+    document.getElementById("problem-text").textContent =
+        `Landsat 8 revisits ${CITY.displayName} roughly every 16 days, but usable land-surface-temperature scenes require the sky to actually be clear — cloud cover silently removes a share of that already-sparse schedule (see the real gap data above). Any product built purely on optical imagery inherits these blind spots by construction, exactly like the map layers earlier on this site.`;
+    renderCitySwitcher("city-switcher");
+    wireCityAwareNavLinks();
+}
+
 async function main() {
+    applyCityChrome();
     let data;
     try {
-        const res = await fetch("timeseries_scenes.json", { cache: "no-store" });
+        const res = await fetch(cityDataPath("timeseries_scenes.json"), { cache: "no-store" });
         data = await res.json();
     } catch (err) {
         console.error("Failed to load timeseries_scenes.json", err);

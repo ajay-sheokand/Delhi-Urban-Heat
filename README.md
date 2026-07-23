@@ -1,18 +1,26 @@
-# Delhi Urban Heat Monitoring Dashboard
+# Urban Heat Monitoring Dashboard
 
-Static, precomputed dashboard for monitoring urban heat in Delhi using satellite and weather data.
+Static, precomputed dashboard for monitoring urban heat, now covering two cities — Delhi, India and Münster, Germany — with a one-click switcher between them. Started as a Delhi-only project; see [Multi-City Support](#multi-city-support) for how the second city was added and what does/doesn't carry over between them.
 
-Live app: `https://ajay-sheokand.github.io/Delhi-Urban-Heat/`
+Live app: `https://ajay-sheokand.github.io/Delhi-Urban-Heat/` (add `?city=muenster` for Münster, or use the in-app switcher)
 
-A legacy Streamlit dashboard (`app.py`) is still in the repo but is no longer the primary/linked app — see [Legacy Streamlit App](#legacy-streamlit-app).
+A legacy Streamlit dashboard (`app.py`) is still in the repo but is no longer the primary/linked app, and covers Delhi only — see [Legacy Streamlit App](#legacy-streamlit-app).
 
 ## Scope
 
+**Delhi**
 - Region: National Capital Territory of Delhi
 - District coverage: 11 districts (`delhi_admin.geojson`)
 - Ward coverage: 290 wards (`delhi_wards.geojson`), pre-2022 delimitation
 - Informal settlement coverage: 685 DUSIB-mapped JJ clusters (`delhi_jj_clusters.geojson`)
-- Main use case: map-based heat monitoring, historical analysis, ward-level heat vulnerability ranking, and a check against where informal settlements actually are
+
+**Münster**
+- Region: City of Münster, North Rhine-Westphalia, Germany
+- District coverage: 9 Stadtbezirke (`muenster_districts.geojson`, dissolved from the ward file)
+- Ward coverage: 45 Statistische Bezirke (`muenster_wards.geojson`)
+- Elderly-population coverage: Zensus 2022 100m grid, ages 65+ (`muenster_elderly_population.geojson`)
+
+Main use case (both cities): map-based heat monitoring, historical analysis, ward-level heat vulnerability ranking, and a complementary-risk-layer check (informal settlements for Delhi, elderly population for Münster).
 
 ## What The Static Frontend Shows
 
@@ -43,6 +51,18 @@ All pages pull only from the precomputed JSON in `backend-data/` — nothing her
 - Map layers (LST/NDVI/land cover) and weather/heat alerts are all precomputed server-side and refresh automatically every 6 hours via GitHub Actions — there is no per-visit satellite or weather computation, and no API keys are ever exposed to the browser. The page loads instantly but reflects data as of the last refresh, not the live moment.
 - Legends update based on which layers are toggled on.
 
+## Multi-City Support
+
+The site started Delhi-only; Münster was added as a second city with a full page reload behind a `?city=` URL parameter (`web/city.js`), not an in-place map teardown/rebuild — simpler and far less bug-prone for a site where all data is precomputed static JSON, so a reload is cheap. The switcher (top-left panel on the map, top nav elsewhere) propagates the current city across all three pages.
+
+**What's shared between cities, unchanged:** every formula in [Variables & Calculations](#variables--calculations) — LST/NDVI conversion, cloud masking, land-cover classes, zonal-statistics methodology, the vulnerability-score formula, the correlation methodology. `scripts/precompute_timeseries_backend.py` runs the exact same `build_*` functions for both cities from one `CITY_CONFIGS` list (`get_city_configs()`) — Delhi's own field names, file paths, and computed values are unchanged from before Münster was added.
+
+**What's genuinely different per city, by necessity:**
+- **Boundaries**: Delhi's district/ward files predate this multi-city work (see their own entries below); Münster's come directly from its official open-data portal (see [Data Sources](#data-sources)).
+- **The "complementary risk layer"**: Delhi has no equivalent of Germany's Zensus data, and Germany has no equivalent of Delhi's informal settlements — so this layer is Delhi-specific (JJ clusters) or Münster-specific (elderly population 65+) by construction, not a forced shared abstraction. The backend computes both through one generic spatial-join helper (`load_point_features_ward_aggregates()`), parameterized per city; the frontend renders two parallel, independently-worded sections (`data-city-section="delhi"` / `"muenster"` in `analytics.html`), shown/hidden based on the active city, because the two narratives genuinely say different things (see [JJ Cluster Overlay & Vulnerability-Score Comparison](#jj-cluster-overlay--vulnerability-score-comparison) and the Münster elderly-population section on-site).
+- **Heat alert methodology**: IMD-style simplified thresholds for Delhi vs DWD-style simplified thresholds for Münster — see [Live Weather & Heat Alerts](#live-weather--heat-alerts).
+- **Output paths**: precomputed JSON is namespaced per city (`backend-data/<slug>/*.json`, published to `<slug>/*.json` on `gh-pages`) since both cities produce identically-named files; static boundary files are not namespaced, since they're already uniquely named (`delhi_*` vs `muenster_*`).
+
 ## Data Sources
 
 | Source | Used for | Resolution / cadence | License / access |
@@ -56,6 +76,8 @@ All pages pull only from the precomputed JSON in `backend-data/` — nothing her
 | `delhi_admin.geojson` | 11 district boundaries | KML-derived, local file | — |
 | [`delhi_wards.geojson`](https://github.com/datameet/Municipal_Spatial_Data) | 290 ward boundaries | Local file, sourced from an ArcGIS Online map | [CC BY-SA 2.5 India](http://creativecommons.org/licenses/by-sa/2.5/in/) |
 | [`delhi_jj_clusters.geojson`](https://github.com/yashveeeeeeer/india-geodata) | 685 JJ (Jhuggi-Jhopri) informal settlement boundaries | Local file, sourced from DUSIB (Delhi Urban Shelter Improvement Board), via the `india-geodata` GitHub release `urban/boundaries` | [CC0](https://creativecommons.org/publicdomain/zero/1.0/) (public domain) |
+| [Stadt Münster Open Data Portal](https://opendata.stadt-muenster.de/) | 45 ward (Statistische Bezirke) boundaries — `muenster_wards.geojson`; 9 districts (`muenster_districts.geojson`) dissolved from these locally by `STADTBEZIR` | Official city GeoJSON, verified 45/45 valid geometries | Open data, city portal |
+| [Zensus 2022 (Destatis)](https://www.destatis.de/zensus2022) — 100m population-by-age grid | `muenster_elderly_population.geojson`: ages 65+, clipped to Münster and joined to wards | 100m INSPIRE grid, official 2022 federal census | Official German federal statistics |
 
 `delhi_wards.geojson` reflects the **pre-2022 delimitation** (the three erstwhile municipal corporations + NDMC + Delhi Cantonment) — no open, downloadable geometry file for the current unified 250-ward structure was found. Disclosed here and on the analytics page rather than presented as current.
 
@@ -113,11 +135,14 @@ Per-polygon `Reducer.mean()` over LST/NDVI at `scale=100`. Districts (11) use a 
 
 ### Air Temperature
 
-NASA POWER `T2M`, averaged over a rolling window (`ANALYTICS_AIR_TEMP_DAYS`, default 90 days), per district centroid. The native grid is ~0.5° latitude × 0.625° longitude — at Delhi's latitude (28.6°N) that's roughly **56km × 61km per cell**, computed as `0.5° × 111.32 km/°` (latitude) and `0.625° × 111.32 km/° × cos(28.6°)` (longitude). Source: [NASA POWER Daily API docs](https://power.larc.nasa.gov/docs/services/api/temporal/daily/). Delhi's NCT is roughly 40km × 50km — smaller than a single POWER grid cell — which is why this variable stays district-level only and is never computed per-ward (see [Known Limitations](#known-limitations)).
+NASA POWER `T2M`, averaged over a rolling window (`ANALYTICS_AIR_TEMP_DAYS`, default 90 days), per district centroid, for both cities. The native grid is ~0.5° latitude × 0.625° longitude — at Delhi's latitude (28.6°N) that's roughly **56km × 61km per cell** (`0.5° × 111.32 km/°` for latitude, `0.625° × 111.32 km/° × cos(28.6°)` for longitude); at Münster's latitude (52.0°N) the same math gives roughly **56km × 43km per cell**, since the longitude term shrinks with `cos(latitude)` closer to the pole. Source: [NASA POWER Daily API docs](https://power.larc.nasa.gov/docs/services/api/temporal/daily/). Both Delhi's NCT (~40km × 50km) and Münster's city area (~15km × 15km) are smaller than a single POWER grid cell — which is why this variable stays district-level only and is never computed per-ward, for either city (see [Known Limitations](#known-limitations)).
 
 ### Live Weather & Heat Alerts
 
-OpenWeather's Current Weather API, refreshed every 6h (not a live per-visit call). The heat alert thresholds used here (`≥40°C` = extreme, `≥35°C` = high) are a **simplified proxy**, not India Meteorological Department's official Heat Wave criteria. IMD's actual definition requires the station's maximum temperature to reach at least 40°C (Plains) *and* either an absolute value of 45°C+ or a departure of 4.5–6.4°C+ from that station's climatological normal, generally assessed against daily maximum temperature rather than an instantaneous reading. Source: [NDMA — Heat Wave](https://ndma.gov.in/Natural-Hazards/Heat-Wave), [IMD Heat Wave FAQ](https://internal.imd.gov.in/section/nhac/dynamic/FAQ_heat_wave.pdf).
+OpenWeather's Current Weather API, refreshed every 6h (not a live per-visit call). Each city uses a different, city-appropriate alert methodology, both **simplified proxies** rather than a reimplementation of the official model:
+
+- **Delhi (`heat_alert_imd`)**: `≥40°C` = extreme, `≥35°C` = high, based on current temperature. Not India Meteorological Department's official Heat Wave criteria — IMD's actual definition requires the station's maximum temperature to reach at least 40°C (Plains) *and* either an absolute value of 45°C+ or a departure of 4.5–6.4°C+ from that station's climatological normal, generally assessed against daily maximum temperature rather than an instantaneous reading. Source: [NDMA — Heat Wave](https://ndma.gov.in/Natural-Hazards/Heat-Wave), [IMD Heat Wave FAQ](https://internal.imd.gov.in/section/nhac/dynamic/FAQ_heat_wave.pdf).
+- **Münster (`heat_alert_dwd`)**: `≥38°C` = extreme, `≥32°C` = high, based on OpenWeather's `feels_like` value. Not DWD's official Hitzewarnung system, which uses a humidity/wind/solar-adjusted "felt temperature" from the Klima-Michel model (with a dedicated "Klima-Michel Senior" variant for elderly residents) rather than a single API's feels-like field, and typically requires the elevated felt temperature to persist 2+ consecutive days. The thresholds themselves (32°C strong heat stress / 38°C extreme heat stress) are DWD's real published values. Source: [Uni Bielefeld — Hitzewarnungen (DWD)](https://www.uni-bielefeld.de/themen/hitze/warnstufen/).
 
 ### Urban Heat Island Intensity — Air (`uhi_air_c`)
 
@@ -145,7 +170,7 @@ The 16-day nominal revisit used to compute expected-vs-actual scene counts is La
 
 ### Population
 
-WorldPop `GP/100m/pop`, filtered to the most recent available year for India (2020 as of the last deploy that touched this dataset — check `population_year` in `ward_vulnerability.json` for the actual value in any given run). These are **modeled** estimates — WorldPop's bottom-up/top-down methods combine census inputs, satellite imagery, and other covariates to produce a gridded surface — not a direct pixel-level census count.
+WorldPop `GP/100m/pop`, filtered to the most recent available year for the relevant country (`country` filter: `IND` for Delhi, `DEU` for Münster — see `population_year` in each city's `ward_vulnerability.json` for the actual year in any given run). These are **modeled** estimates — WorldPop's bottom-up/top-down methods combine census inputs, satellite imagery, and other covariates to produce a gridded surface — not a direct pixel-level census count. This is the general ward-level population density input for both cities; Münster's separate elderly-specific 65+ figures come from the Zensus 2022 grid instead (see [JJ Cluster Overlay & Vulnerability-Score Comparison](#jj-cluster-overlay--vulnerability-score-comparison) below, which also covers the Münster elderly-population equivalent).
 
 ### Ward Vulnerability Score
 
@@ -163,9 +188,15 @@ Each component is min-max normalized to [0, 1] across all 290 wards before avera
 
 ### JJ Cluster Overlay & Vulnerability-Score Comparison
 
-DUSIB's 685 mapped JJ (Jhuggi-Jhopri, i.e. informal settlement) cluster polygons are spatially joined to wards by **cluster centroid inside ward polygon** (not the source data's own `WARD_NO` attribute, which is missing/unusable for ~4% of rows — mostly Cantonment/NDMC clusters — while the geometry itself still resolves cleanly). This gives each ward `jj_cluster_count` and `jj_cluster_households` (summed from `APPR_JHUGI`), and a citywide Pearson `r` (reusing the same `pearson_correlation()` used for [NDVI ↔ LST](#ndvi--lst-correlation)) between `vulnerability_score` and JJ-cluster household density per ward.
+Both cities compute a "complementary risk layer" through the same generic backend helper (`load_point_features_ward_aggregates()`): small point/polygon features with a numeric value field, spatially joined to wards by **feature centroid inside ward polygon**, aggregated to a per-ward count and value sum, then correlated (Pearson `r`, reusing `pearson_correlation()` from [NDVI ↔ LST](#ndvi--lst-correlation)) against `vulnerability_score`. What the layer actually *is* differs by necessity — see [Multi-City Support](#multi-city-support) for why — so each city gets its own output field names and its own on-site narrative.
 
-**What we actually found, checked against the live data rather than assumed:** the correlation is weak, and for raw cluster count it's slightly *negative* (density r ≈ 0.15, count r ≈ -0.16 at the time this was built). Most of the top-ranked wards by vulnerability score — the hot, dense, green-poor Northeast Delhi belt — contain **zero** officially mapped JJ clusters. This isn't a data quality problem: Delhi's unplanned housing spans several distinct legal categories (JJ clusters, unauthorized colonies, urban villages), and DUSIB's list covers only the first of those. A ward can score low on satellite-visible heat/density metrics while still containing residents facing real housing-specific risk (informal construction, no piped water or drainage, insecure tenure) that LST/NDVI/population data structurally cannot see. **This overlay is presented as a complementary, independent risk signal, not as validation of the score above** — the on-site "Informal Settlements" section is explicit that a weak correlation was found and explains why, rather than implying agreement that isn't there.
+**Delhi — JJ clusters:** DUSIB's 685 mapped JJ (Jhuggi-Jhopri, i.e. informal settlement) cluster polygons, joined by centroid (not the source data's own `WARD_NO` attribute, which is missing/unusable for ~4% of rows — mostly Cantonment/NDMC clusters — while the geometry itself still resolves cleanly). Output fields: `jj_cluster_count`, `jj_cluster_households` (summed from `APPR_JHUGI`), `jj_household_density_km2`, `validation.jj_cluster_correlation_r`.
+
+**What we actually found for Delhi, checked against the live data rather than assumed:** the correlation is weak, and for raw cluster count it's slightly *negative* (density r ≈ 0.15, count r ≈ -0.16 at the time this was built). Most of the top-ranked wards by vulnerability score — the hot, dense, green-poor Northeast Delhi belt — contain **zero** officially mapped JJ clusters. This isn't a data quality problem: Delhi's unplanned housing spans several distinct legal categories (JJ clusters, unauthorized colonies, urban villages), and DUSIB's list covers only the first of those. A ward can score low on satellite-visible heat/density metrics while still containing residents facing real housing-specific risk (informal construction, no piped water or drainage, insecure tenure) that LST/NDVI/population data structurally cannot see.
+
+**Münster — elderly population (65+):** Zensus 2022's 100m population-by-age grid, clipped to Münster, summed to 65+ per grid cell, joined by cell centroid (trivial for Point geometry — the centroid of a point is itself). Output fields: `elderly_grid_cell_count`, `elderly_population` (the value sum), `elderly_density_km2`, `validation.elderly_correlation_r`. Age is the single largest heat-mortality risk factor in the heat-health literature (it's why DWD's own model has a "Klima-Michel Senior" variant), so this is a genuinely meaningful independent check, not an arbitrary substitute for JJ clusters. One data caveat specific to this source: German federal statistical disclosure control suppresses very small per-cell counts for privacy (shown as `–` in the raw Zensus CSV), treated as 0 here, so true elderly counts in sparsely populated cells are somewhat underestimated.
+
+**In both cases, this overlay is presented as a complementary, independent risk signal, not as validation of the score above** — the on-site sections are explicit about whatever correlation was actually found (weak, for Delhi) and explain why, rather than implying agreement that isn't there.
 
 ## Known Limitations
 
@@ -175,22 +206,28 @@ DUSIB's 685 mapped JJ (Jhuggi-Jhopri, i.e. informal settlement) cluster polygons
 - **The ward vulnerability score is exposure-only** — no socioeconomic or health data — see [Ward Vulnerability Score](#ward-vulnerability-score).
 - **JJ cluster data covers only officially recognized/mapped clusters** (DUSIB's list), not all informal or precarious housing — and correlates only weakly with the vulnerability score, for real reasons, not a bug — see [JJ Cluster Overlay & Vulnerability-Score Comparison](#jj-cluster-overlay--vulnerability-score-comparison).
 - **`uhi_air_c` uses a citywide-mean reference, not a dedicated rural station** — see [Urban Heat Island Intensity — Air](#urban-heat-island-intensity--air-uhi_air_c).
-- **All map layers and analytics reflect the last successful precompute run** (every 6h), not the live moment when a page is loaded.
+- **Heat alerts for Münster are a simplified proxy for DWD's Hitzewarnung system**, using OpenWeather's `feels_like` against DWD's real thresholds rather than the official Klima-Michel model — see [Live Weather & Heat Alerts](#live-weather--heat-alerts).
+- **Münster's elderly-population grid undercounts small-population cells** due to German federal statistical disclosure control suppressing small counts — see [JJ Cluster Overlay & Vulnerability-Score Comparison](#jj-cluster-overlay--vulnerability-score-comparison).
+- **All map layers and analytics reflect the last successful precompute run** (every 6h), not the live moment when a page is loaded — true for both cities.
 
 ## Project Structure
 
 - `web/`: static frontend (primary app)
-  - `index.html` / `app.js`: MapLibre map + Chart.js time series + weather + district/ward/JJ-cluster click-to-inspect
-  - `analytics.html` / `analytics.js`: UHI, correlation, land-cover, long-term trend, ward-vulnerability, and JJ-cluster-comparison analytics
+  - `city.js`: shared city config (paths, map view, labels per city) + the `?city=` switcher, included by all three pages
+  - `index.html` / `app.js`: MapLibre map + Chart.js time series + weather + district/ward/complementary-layer click-to-inspect
+  - `analytics.html` / `analytics.js`: UHI, correlation, land-cover, long-term trend, ward-vulnerability, and complementary-layer analytics
   - `roadmap.html` / `roadmap.js`: cloud-gap evidence + SAR-Optical GNN roadmap narrative
-  - `style.css`: shared styling for all three pages
-- `app.py`: legacy Streamlit dashboard (secondary, not linked as the primary app)
+  - `style.css`: shared styling for all pages
+- `app.py`: legacy Streamlit dashboard (secondary, not linked as the primary app, Delhi only)
 - `delhi_admin.geojson`: Delhi administrative boundaries (11 districts, `District` name property)
 - `delhi_admin.kml`: Alternate boundary file
 - `delhi_wards.geojson`: Delhi ward boundaries (290 features, `Ward_Name`/`Ward_No` properties — `Ward_No` is the unique key used to match `ward_vulnerability.json` rows)
 - `delhi_jj_clusters.geojson`: DUSIB JJ (informal settlement) cluster boundaries (685 features, `slum_name`/`ward_no`/`approx_households`/`land_owning_agency` properties)
-- `scripts/precompute_timeseries_backend.py`: Precomputes `timeseries_scenes.json` (LST time series), `map_layers.json` (LST/NDVI/land-cover tile URLs), `district_analytics.json` (UHI/correlation/land-cover analytics), `weather.json` (per-district OpenWeather readings + heat alerts), `historical_trends.json` (LST-by-land-cover, monthly, full history — recomputed weekly; force an immediate recompute via the `force_historical_trends` input on a manual `Run workflow`), and `ward_vulnerability.json` (per-ward LST/NDVI/population/vulnerability score/JJ-cluster aggregates, 290 wards, recomputed every 6h)
-- `.github/workflows/precompute-backend-data.yml`: Scheduled/manual precompute, then publishes `web/`, `delhi_admin.geojson`, `delhi_wards.geojson`, `delhi_jj_clusters.geojson`, and `backend-data/` to `gh-pages`
+- `muenster_districts.geojson`: Münster's 9 districts (Stadtbezirke), dissolved locally from the wards file
+- `muenster_wards.geojson`: Münster's 45 wards (Statistische Bezirke), `ward_name`/`ward_no`/`district_name` properties
+- `muenster_elderly_population.geojson`: Zensus 2022 100m grid cells (ages 65+) clipped to Münster, `elderly_population`/`total_population` properties
+- `scripts/precompute_timeseries_backend.py`: `get_city_configs()` defines both cities; `main()` loops over them, writing each city's `timeseries_scenes.json`, `map_layers.json`, `district_analytics.json`, `weather.json`, `historical_trends.json` (recomputed weekly; force an immediate recompute via the `force_historical_trends` input on a manual `Run workflow`), and `ward_vulnerability.json` (includes the complementary-layer fields) to `backend-data/<city_slug>/`
+- `.github/workflows/precompute-backend-data.yml`: Scheduled/manual precompute, then publishes `web/`, both cities' static boundary/complementary geojson files, and `backend-data/<city_slug>/*` (as `<city_slug>/*` on the published site) to `gh-pages`
 - `requirements.txt`: Python dependencies
 - `runtime.txt`: Python runtime pin
 
@@ -209,9 +246,9 @@ The static frontend and its data are published together to the `gh-pages` branch
    - Source: `Deploy from a branch`
    - Branch: `gh-pages`
    - Folder: `/ (root)`
-4. Visit `https://<your-github-username>.github.io/<your-repo-name>/` — this now serves `web/index.html` directly, reading `map_layers.json`, `district_analytics.json`, `weather.json`, `timeseries_scenes.json`, and `ward_vulnerability.json` (plus the static `delhi_wards.geojson` / `delhi_jj_clusters.geojson`) from the same site. `analytics.html` and `roadmap.html` are linked from the map's top-left panel.
+4. Visit `https://<your-github-username>.github.io/<your-repo-name>/` — this now serves `web/index.html` directly, defaulting to Delhi and reading `map_layers.json`, `district_analytics.json`, `weather.json`, `timeseries_scenes.json`, and `ward_vulnerability.json` from `delhi/` on the same site (plus the static `delhi_wards.geojson` / `delhi_jj_clusters.geojson`). Add `?city=muenster` (or use the in-app switcher) for Münster, reading the same filenames from `muenster/` plus `muenster_wards.geojson` / `muenster_elderly_population.geojson`. `analytics.html` and `roadmap.html` are linked from the map's top-left panel and preserve whichever city is currently selected.
 
-The workflow re-runs every 6 hours, regenerating the precomputed JSON files (including fresh Earth Engine tile URLs and fresh weather readings) and republishing everything to `gh-pages`. Each precomputed file has its own try/except in the script — if one fails (e.g. a transient EE or NASA POWER error), the previous version of that file is left in place rather than failing the whole run (the workflow's "Seed backend-data from previous publish" step is what makes that fallback real: it pulls the current live copy of each file before the script runs, so a skipped or failed dataset republishes unchanged instead of vanishing).
+The workflow re-runs every 6 hours, regenerating the precomputed JSON files for **both cities** (including fresh Earth Engine tile URLs and fresh weather readings) and republishing everything to `gh-pages`. Each precomputed file has its own try/except in the script, per city — if one fails (e.g. a transient EE or NASA POWER error), the previous version of that file is left in place rather than failing the whole run (the workflow's "Seed backend-data from previous publish" step is what makes that fallback real: it pulls the current live copy of each city's files before the script runs, so a skipped or failed dataset republishes unchanged instead of vanishing).
 
 ## Legacy Streamlit App
 
@@ -289,4 +326,4 @@ For educational and research use.
 
 ## Last Updated
 
-July 23, 2026
+July 23, 2026 (Münster added as a second city)

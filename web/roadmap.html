@@ -3,24 +3,26 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Roadmap | Delhi Urban Heat Monitor</title>
+    <title id="page-title">Roadmap | Delhi Urban Heat Monitor</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%9B%B0%EF%B8%8F</text></svg>" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <link rel="stylesheet" href="style.css" />
+    <script src="city.js"></script>
 </head>
 <body class="doc-page">
 
     <nav class="site-nav">
-        <span class="brand">🌡️ Delhi Urban Heat Monitor</span>
-        <a href="index.html">Map</a>
-        <a href="analytics.html">Analytics</a>
-        <a href="roadmap.html" class="active">Roadmap</a>
+        <span class="brand" id="site-brand">🌡️ Delhi Urban Heat Monitor</span>
+        <div id="city-switcher" class="city-switcher"></div>
+        <a href="index.html" data-nav-page="index.html">Map</a>
+        <a href="analytics.html" data-nav-page="analytics.html">Analytics</a>
+        <a href="roadmap.html" data-nav-page="roadmap.html" class="active">Roadmap</a>
     </nav>
 
     <div class="page-container">
         <div class="page-header">
             <h1>🛰️ Roadmap: Filling the Gaps with SAR <span class="badge">In Development</span></h1>
-            <p>Every optical satellite used on this site — Landsat 8, Sentinel-2 — is blind through cloud cover. The numbers below are computed directly from this project's own Landsat record, not a hypothetical: they show how often that actually happens over Delhi.</p>
+            <p id="page-intro">Every optical satellite used on this site — Landsat 8, Sentinel-2 — is blind through cloud cover. The numbers below are computed directly from this project's own Landsat record, not a hypothetical: they show how often that actually happens over Delhi.</p>
             <div id="roadmap-error-banner"></div>
         </div>
 
@@ -45,7 +47,7 @@
         <h2 class="section-title">The Approach</h2>
         <div class="narrative-card">
             <h3>The Problem</h3>
-            <p>Landsat 8 revisits Delhi roughly every 16 days, but usable land-surface-temperature scenes require the sky to actually be clear — cloud cover, especially during monsoon months, silently removes a large share of that already-sparse schedule (see the real gap data above). Any product built purely on optical imagery inherits these blind spots by construction, exactly like the map layers earlier on this site.</p>
+            <p id="problem-text">Landsat 8 revisits Delhi roughly every 16 days, but usable land-surface-temperature scenes require the sky to actually be clear — cloud cover, especially during monsoon months, silently removes a large share of that already-sparse schedule (see the real gap data above). Any product built purely on optical imagery inherits these blind spots by construction, exactly like the map layers earlier on this site.</p>
 
             <h3>Why SAR</h3>
             <p>Synthetic Aperture Radar (e.g. Sentinel-1) images through cloud cover and at night, because it's an active sensor operating in the microwave range rather than reflected sunlight or thermal emission. It doesn't directly measure the same physical quantities as optical/thermal sensors, but its backscatter is correlated with surface structure, moisture, and vegetation — enough signal, in principle, to learn a mapping back to optical-equivalent bands.</p>

@@ -3,25 +3,27 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Delhi Urban Heat Monitor</title>
+    <title id="page-title">Delhi Urban Heat Monitor</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%8C%A1%EF%B8%8F</text></svg>" />
     <script src="https://unpkg.com/maplibre-gl@3.x/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.x/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <link rel="stylesheet" href="style.css" />
+    <script src="city.js"></script>
 </head>
 <body>
 
     <div id="map"></div>
 
     <div class="panel panel-top-left">
-        <h1>🌡️ Delhi Urban Heat Monitor</h1>
-        <p>Satellite-derived land surface temperature, vegetation and land cover across Delhi's 11 districts. Map layers refresh automatically every 6 hours.</p>
+        <div id="city-switcher" class="city-switcher"></div>
+        <h1 id="page-heading">🌡️ Delhi Urban Heat Monitor</h1>
+        <p id="panel-description">Satellite-derived land surface temperature, vegetation and land cover across Delhi's 11 districts. Map layers refresh automatically every 6 hours.</p>
         <div id="data-updated" class="muted"></div>
         <div id="index-error-banner"></div>
         <div class="panel-nav">
-            <a href="analytics.html">📊 Full Analytics</a>
-            <a href="roadmap.html">🛰️ Roadmap</a>
+            <a href="analytics.html" data-nav-page="analytics.html">📊 Full Analytics</a>
+            <a href="roadmap.html" data-nav-page="roadmap.html">🛰️ Roadmap</a>
         </div>
     </div>
 
@@ -30,9 +32,9 @@
         <label><input type="checkbox" id="toggle-lst" checked /> 🌡️ Land Surface Temperature</label>
         <label><input type="checkbox" id="toggle-ndvi" /> 🌿 Vegetation Index (NDVI)</label>
         <label><input type="checkbox" id="toggle-landcover" /> 🌍 Land Cover</label>
-        <label><input type="checkbox" id="toggle-districts" checked /> 🗺️ District Boundaries</label>
-        <label><input type="checkbox" id="toggle-wards" /> 📍 Ward Boundaries (290, click to inspect)</label>
-        <label><input type="checkbox" id="toggle-jj-clusters" /> 🏘️ Informal Settlements (685, click to inspect)</label>
+        <label><input type="checkbox" id="toggle-districts" checked /> 🗺️ <span id="toggle-districts-label">District Boundaries</span></label>
+        <label><input type="checkbox" id="toggle-wards" /> 📍 <span id="toggle-wards-label">Ward Boundaries (290, click to inspect)</span></label>
+        <label><input type="checkbox" id="toggle-jj-clusters" /> <span id="toggle-complementary-label">🏘️ Informal Settlements (685, click to inspect)</span></label>
         <label><input type="checkbox" id="toggle-weather" checked /> 🌤️ Weather Markers</label>
     </div>
 

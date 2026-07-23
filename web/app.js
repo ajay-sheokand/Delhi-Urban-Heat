@@ -17,8 +17,8 @@ const map = new maplibregl.Map({
         },
         layers: [{ id: "carto-base", type: "raster", source: "carto" }],
     },
-    center: [77.1025, 28.6139],
-    zoom: 10,
+    center: CITY.mapView.center,
+    zoom: CITY.mapView.zoom,
 });
 
 map.addControl(new maplibregl.NavigationControl(), "bottom-right");
@@ -31,18 +31,32 @@ function showErrorBanner(message) {
     container.appendChild(div);
 }
 
+function applyCityChrome() {
+    document.getElementById("page-title").textContent = `${CITY.displayName} Urban Heat Monitor`;
+    document.getElementById("page-heading").textContent = `🌡️ ${CITY.displayName} Urban Heat Monitor`;
+    document.getElementById("panel-description").textContent = CITY.panelDescription;
+    document.getElementById("toggle-districts-label").textContent = `${CITY.districtLabel} Boundaries`;
+    document.getElementById("toggle-wards-label").textContent = `${CITY.wardLabel} Boundaries (${CITY.wardCount}, click to inspect)`;
+    const complementaryCountLabel = CITY.complementaryCount ? `${CITY.complementaryCount}, ` : "";
+    document.getElementById("toggle-complementary-label").textContent =
+        `${CITY.complementaryToggleIcon} ${CITY.complementaryLabel} (${complementaryCountLabel}click to inspect)`;
+    renderCitySwitcher("city-switcher");
+    wireCityAwareNavLinks();
+}
+
 map.on("load", async () => {
+    applyCityChrome();
     setupTabs();
     document.getElementById("data-updated").textContent = "Loading map data…";
     document.getElementById("heat-alerts-list").textContent = "Loading weather…";
-    await Promise.all([loadMapLayers(), loadDistrictBoundaries(), loadWardBoundaries(), loadJJClusters(), loadTimeSeries()]);
+    await Promise.all([loadMapLayers(), loadDistrictBoundaries(), loadWardBoundaries(), loadComplementaryLayer(), loadTimeSeries()]);
     loadWeather();
 });
 
 async function loadMapLayers() {
     let data;
     try {
-        const res = await fetch("map_layers.json", { cache: "no-store" });
+        const res = await fetch(cityDataPath("map_layers.json"), { cache: "no-store" });
         data = await res.json();
     } catch (err) {
         console.error("Failed to load map_layers.json", err);
@@ -143,11 +157,11 @@ function titleCase(str) {
 async function loadDistrictBoundaries() {
     let geojson;
     try {
-        const res = await fetch("delhi_admin.geojson", { cache: "no-store" });
+        const res = await fetch(CITY.districtBoundaryFile, { cache: "no-store" });
         geojson = await res.json();
     } catch (err) {
-        console.error("Failed to load delhi_admin.geojson", err);
-        showErrorBanner("District boundaries unavailable — try reloading.");
+        console.error(`Failed to load ${CITY.districtBoundaryFile}`, err);
+        showErrorBanner(`${CITY.districtLabel} boundaries unavailable — try reloading.`);
         return;
     }
 
@@ -176,7 +190,7 @@ async function loadDistrictBoundaries() {
 
     let districtStats = [];
     try {
-        const res = await fetch("district_analytics.json", { cache: "no-store" });
+        const res = await fetch(cityDataPath("district_analytics.json"), { cache: "no-store" });
         const data = await res.json();
         districtStats = data.districts || [];
     } catch (err) {
@@ -185,8 +199,8 @@ async function loadDistrictBoundaries() {
 
     map.on("click", "district-fill", (e) => {
         const props = e.features[0].properties;
-        const rawName = props.District || props.Name || "Unknown";
-        const name = titleCase(rawName);
+        const rawName = props[CITY.districtNameProp] || "Unknown";
+        const name = CITY.districtNameTitleCase ? titleCase(rawName) : rawName;
         const stats = districtStats.find((d) => d.name === name);
 
         const html = stats
@@ -194,7 +208,7 @@ async function loadDistrictBoundaries() {
                LST: ${fmtC(stats.mean_lst_c)} · NDVI: ${fmtNum(stats.mean_ndvi, 3)}<br/>
                Air Temp: ${fmtC(stats.air_temp_c)}<br/>
                Air UHI: ${fmtC(stats.uhi_air_c, true)} · Surface UHI: ${fmtC(stats.uhi_surface_c, true)}`
-            : `<strong>${name}</strong><br/>District analytics unavailable.`;
+            : `<strong>${name}</strong><br/>${CITY.districtLabel} analytics unavailable.`;
 
         new maplibregl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
@@ -203,11 +217,11 @@ async function loadDistrictBoundaries() {
 async function loadWardBoundaries() {
     let geojson;
     try {
-        const res = await fetch("delhi_wards.geojson", { cache: "no-store" });
+        const res = await fetch(CITY.wardBoundaryFile, { cache: "no-store" });
         geojson = await res.json();
     } catch (err) {
-        console.error("Failed to load delhi_wards.geojson", err);
-        showErrorBanner("Ward boundaries unavailable — try reloading.");
+        console.error(`Failed to load ${CITY.wardBoundaryFile}`, err);
+        showErrorBanner(`${CITY.wardLabel} boundaries unavailable — try reloading.`);
         return;
     }
 
@@ -238,7 +252,7 @@ async function loadWardBoundaries() {
 
     let wardStats = [];
     try {
-        const res = await fetch("ward_vulnerability.json", { cache: "no-store" });
+        const res = await fetch(cityDataPath("ward_vulnerability.json"), { cache: "no-store" });
         const data = await res.json();
         wardStats = data.wards || [];
     } catch (err) {
@@ -247,8 +261,8 @@ async function loadWardBoundaries() {
 
     map.on("click", "ward-fill", (e) => {
         const props = e.features[0].properties;
-        const wardNo = props.Ward_No;
-        const name = props.Ward_Name || "Unknown";
+        const wardNo = props[CITY.wardNoProp];
+        const name = props[CITY.wardNameProp] || "Unknown";
         const stats = wardStats.find((w) => w.ward_no === wardNo);
 
         const html = stats
@@ -258,57 +272,88 @@ async function loadWardBoundaries() {
                    stats.population_density_km2 != null ? Math.round(stats.population_density_km2).toLocaleString() : "N/A"
                }/km²<br/>
                Vulnerability score: ${fmtNum(stats.vulnerability_score, 1)} / 100<br/>
-               <span class="muted">Air temperature is district-level only — see the boundary below.</span>`
-            : `<strong>${name}</strong><br/>Ward analytics unavailable.`;
+               <span class="muted">Air temperature is ${CITY.districtLabel.toLowerCase()}-level only — see the boundary below.</span>`
+            : `<strong>${name}</strong><br/>${CITY.wardLabel} analytics unavailable.`;
 
         new maplibregl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
 }
 
-async function loadJJClusters() {
-    let geojson;
-    try {
-        const res = await fetch("delhi_jj_clusters.geojson", { cache: "no-store" });
-        geojson = await res.json();
-    } catch (err) {
-        console.error("Failed to load delhi_jj_clusters.geojson", err);
-        showErrorBanner("Informal settlement boundaries unavailable — try reloading.");
-        return;
-    }
-
-    map.addSource("jj-clusters", { type: "geojson", data: geojson });
-    map.addLayer({
-        id: "jj-cluster-fill",
-        type: "fill",
-        source: "jj-clusters",
-        paint: { "fill-color": "#8b4513", "fill-opacity": 0.45 },
-        layout: { visibility: "none" },
-    });
-    map.addLayer({
-        id: "jj-cluster-lines",
-        type: "line",
-        source: "jj-clusters",
-        paint: { "line-color": "#5a2d0c", "line-width": 1, "line-opacity": 0.8 },
-        layout: { visibility: "none" },
-    });
-
-    document.getElementById("toggle-jj-clusters").addEventListener("change", (e) => {
-        const visibility = e.target.checked ? "visible" : "none";
-        map.setLayoutProperty("jj-cluster-fill", "visibility", visibility);
-        map.setLayoutProperty("jj-cluster-lines", "visibility", visibility);
-    });
-
-    map.on("mouseenter", "jj-cluster-fill", () => (map.getCanvas().style.cursor = "pointer"));
-    map.on("mouseleave", "jj-cluster-fill", () => (map.getCanvas().style.cursor = ""));
-
-    map.on("click", "jj-cluster-fill", (e) => {
-        const props = e.features[0].properties;
+function complementaryFeaturePopupHtml(props) {
+    if (CITY.slug === "delhi") {
         const households = props.approx_households;
-        const html = `<strong>${props.slum_name}</strong><br/>
+        return `<strong>${props.slum_name}</strong><br/>
             Ward: ${props.ward_name}<br/>
             Approx. households: ${households != null ? Number(households).toLocaleString() : "N/A"}<br/>
             Land-owning agency: ${props.land_owning_agency || "N/A"}<br/>
             <span class="muted">Source: DUSIB (Delhi Urban Shelter Improvement Board)</span>`;
+    }
+    // muenster: Zensus grid cells are anonymous 100m cells, not named places.
+    const elderly = props.elderly_population;
+    const total = props.total_population;
+    return `<strong>Zensus grid cell</strong><br/>
+        Population 65+: ${elderly != null ? Number(elderly).toLocaleString() : "N/A"}<br/>
+        Total population: ${total != null ? Number(total).toLocaleString() : "N/A"}<br/>
+        <span class="muted">Source: Zensus 2022 (Destatis), 100m grid</span>`;
+}
+
+async function loadComplementaryLayer() {
+    let geojson;
+    try {
+        const res = await fetch(CITY.complementaryLayerFile, { cache: "no-store" });
+        geojson = await res.json();
+    } catch (err) {
+        console.error(`Failed to load ${CITY.complementaryLayerFile}`, err);
+        showErrorBanner(`${CITY.complementaryLabel} data unavailable — try reloading.`);
+        return;
+    }
+
+    // MapLibre fill/line layers only render (and hit-test) Polygon geometry;
+    // Münster's elderly-population layer is Points, so it needs a circle
+    // layer instead - and since fill layers can't hit-test Points either,
+    // "complementary-fill" IS the clickable layer either way, just typed
+    // differently depending on the current city's geometry.
+    const isPoints = geojson.features[0]?.geometry?.type === "Point";
+    map.addSource("complementary-layer", { type: "geojson", data: geojson });
+
+    if (isPoints) {
+        map.addLayer({
+            id: "complementary-fill",
+            type: "circle",
+            source: "complementary-layer",
+            paint: { "circle-color": CITY.complementaryFillColor, "circle-radius": 4, "circle-opacity": 0.7 },
+            layout: { visibility: "none" },
+        });
+    } else {
+        map.addLayer({
+            id: "complementary-fill",
+            type: "fill",
+            source: "complementary-layer",
+            paint: { "fill-color": CITY.complementaryFillColor, "fill-opacity": 0.45 },
+            layout: { visibility: "none" },
+        });
+        map.addLayer({
+            id: "complementary-lines",
+            type: "line",
+            source: "complementary-layer",
+            paint: { "line-color": CITY.complementaryLineColor, "line-width": 1, "line-opacity": 0.8 },
+            layout: { visibility: "none" },
+        });
+    }
+
+    document.getElementById("toggle-jj-clusters").addEventListener("change", (e) => {
+        const visibility = e.target.checked ? "visible" : "none";
+        map.setLayoutProperty("complementary-fill", "visibility", visibility);
+        if (map.getLayer("complementary-lines")) {
+            map.setLayoutProperty("complementary-lines", "visibility", visibility);
+        }
+    });
+
+    map.on("mouseenter", "complementary-fill", () => (map.getCanvas().style.cursor = "pointer"));
+    map.on("mouseleave", "complementary-fill", () => (map.getCanvas().style.cursor = ""));
+
+    map.on("click", "complementary-fill", (e) => {
+        const html = complementaryFeaturePopupHtml(e.features[0].properties);
         new maplibregl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
 }
@@ -329,7 +374,7 @@ let allTimeSeriesRecords = [];
 async function loadTimeSeries() {
     let data;
     try {
-        const res = await fetch("timeseries_scenes.json", { cache: "no-store" });
+        const res = await fetch(cityDataPath("timeseries_scenes.json"), { cache: "no-store" });
         data = await res.json();
     } catch (err) {
         console.error("Failed to load timeseries_scenes.json", err);
@@ -397,7 +442,7 @@ async function loadWeather() {
 
     let data;
     try {
-        const res = await fetch("weather.json", { cache: "no-store" });
+        const res = await fetch(cityDataPath("weather.json"), { cache: "no-store" });
         data = await res.json();
     } catch (err) {
         console.error("Failed to load weather.json", err);

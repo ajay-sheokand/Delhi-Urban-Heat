@@ -51,14 +51,16 @@ jobs:
 
       - name: Seed backend-data from previous publish
         run: |
-          mkdir -p backend-data
           git fetch origin gh-pages --depth=1 2>/dev/null || true
-          for f in timeseries_scenes.json map_layers.json district_analytics.json weather.json historical_trends.json ward_vulnerability.json; do
-            if git show origin/gh-pages:"$f" > "backend-data/$f.tmp" 2>/dev/null; then
-              mv "backend-data/$f.tmp" "backend-data/$f"
-            else
-              rm -f "backend-data/$f.tmp"
-            fi
+          for city in delhi muenster; do
+            mkdir -p "backend-data/$city"
+            for f in timeseries_scenes.json map_layers.json district_analytics.json weather.json historical_trends.json ward_vulnerability.json; do
+              if git show origin/gh-pages:"$city/$f" > "backend-data/$city/$f.tmp" 2>/dev/null; then
+                mv "backend-data/$city/$f.tmp" "backend-data/$city/$f"
+              else
+                rm -f "backend-data/$city/$f.tmp"
+              fi
+            done
           done
 
       - name: Precompute timeseries dataset
@@ -78,6 +80,9 @@ jobs:
           cp delhi_admin.geojson public/
           cp delhi_wards.geojson public/
           cp delhi_jj_clusters.geojson public/
+          cp muenster_districts.geojson public/
+          cp muenster_wards.geojson public/
+          cp muenster_elderly_population.geojson public/
           cp -r backend-data/* public/
 
       - name: Publish to gh-pages
