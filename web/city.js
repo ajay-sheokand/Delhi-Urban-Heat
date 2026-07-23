@@ -8,7 +8,9 @@ const CITIES = {
         slug: "delhi",
         displayName: "Delhi",
         flag: "🇮🇳",
-        mapView: { center: [77.1025, 28.6139], zoom: 10 },
+        // maxBounds padded out from delhi_wards.geojson's real extent
+        // (76.8388,28.4043)-(77.3476,28.8835), confirmed by computing it directly from the file.
+        mapView: { center: [77.1025, 28.6139], zoom: 10, maxBounds: [[76.5, 28.1], [77.7, 29.2]] },
         districtBoundaryFile: "delhi_admin.geojson",
         districtNameProp: "District",
         districtNameTitleCase: true,
@@ -42,7 +44,9 @@ const CITIES = {
         slug: "muenster",
         displayName: "Münster",
         flag: "🇩🇪",
-        mapView: { center: [7.6261, 51.9607], zoom: 12 },
+        // maxBounds padded out from muenster_wards.geojson's real extent
+        // (7.4738,51.8401)-(7.7744,52.0600), confirmed by computing it directly from the file.
+        mapView: { center: [7.6261, 51.9607], zoom: 12, maxBounds: [[7.15, 51.6], [8.1, 52.3]] },
         districtBoundaryFile: "muenster_districts.geojson",
         districtNameProp: "district_name",
         districtNameTitleCase: false,

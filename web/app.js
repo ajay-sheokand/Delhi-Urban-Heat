@@ -51,6 +51,7 @@ const map = new maplibregl.Map({
     },
     center: CITY.mapView.center,
     zoom: CITY.mapView.zoom,
+    maxBounds: CITY.mapView.maxBounds,
 });
 
 map.addControl(new maplibregl.NavigationControl(), "bottom-right");
