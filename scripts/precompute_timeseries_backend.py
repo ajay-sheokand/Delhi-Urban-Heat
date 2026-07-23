@@ -634,11 +634,42 @@ def _minmax_normalizer(values: list, invert: bool = False):
     return norm
 
 
+def load_jj_cluster_ward_aggregates(workspace: str) -> dict:
+    """Spatial-joins DUSIB JJ (Jhuggi-Jhopri, i.e. informal settlement)
+    cluster centroids into Delhi's 290 wards, returning per-ward aggregate
+    counts/households keyed by ward_no (the same key used throughout
+    ward_vulnerability.json). A spatial join (centroid-in-polygon) is used
+    rather than the source data's own WARD_NO attribute because ~4% of
+    clusters (Cantonment/NDMC rows) don't carry a usable ward code there,
+    while their geometry still falls cleanly inside a real ward polygon.
+    """
+    wards_gdf = gpd.read_file(os.path.join(workspace, "delhi_wards.geojson"))
+    clusters_gdf = gpd.read_file(os.path.join(workspace, "delhi_jj_clusters.geojson"))
+
+    centroids_gdf = clusters_gdf.copy()
+    centroids_gdf["geometry"] = centroids_gdf.geometry.centroid
+
+    joined = gpd.sjoin(
+        centroids_gdf, wards_gdf[["Ward_No", "geometry"]], how="inner", predicate="within"
+    )
+
+    aggregates: dict = {}
+    for _, row in joined.iterrows():
+        ward_no = str(row["Ward_No"])
+        entry = aggregates.setdefault(ward_no, {"jj_cluster_count": 0, "jj_cluster_households": 0})
+        entry["jj_cluster_count"] += 1
+        households = row.get("approx_households")
+        if households:
+            entry["jj_cluster_households"] += int(households)
+    return aggregates
+
+
 def build_ward_vulnerability_dataset(
     region: ee.Geometry,
     ward_fc: ee.FeatureCollection,
     lst_image: ee.Image,
     ndvi_image: ee.Image,
+    workspace: str,
 ) -> dict:
     """Ward-resolution LST/NDVI/population — the inputs that are genuinely
     fine-grained at the satellite/gridded-population level. Air temperature
@@ -672,6 +703,8 @@ def build_ward_vulnerability_dataset(
     # unlike mean() (used above), which keeps the band name ("LST"/"NDVI").
     pop_by_ward = {f["properties"].get("ward_no"): f["properties"].get("sum") for f in pop_rows}
 
+    jj_by_ward = load_jj_cluster_ward_aggregates(workspace)
+
     wards = []
     for feat in lst_ndvi_rows:
         props = feat.get("properties", {})
@@ -681,6 +714,8 @@ def build_ward_vulnerability_dataset(
         population_density_km2 = (
             population / area_km2 if population is not None and area_km2 else None
         )
+        jj = jj_by_ward.get(ward_no, {"jj_cluster_count": 0, "jj_cluster_households": 0})
+        jj_household_density_km2 = jj["jj_cluster_households"] / area_km2 if area_km2 else None
         wards.append(
             {
                 "ward_name": props.get("ward_name"),
@@ -690,6 +725,9 @@ def build_ward_vulnerability_dataset(
                 "area_km2": area_km2,
                 "population": population,
                 "population_density_km2": population_density_km2,
+                "jj_cluster_count": jj["jj_cluster_count"],
+                "jj_cluster_households": jj["jj_cluster_households"],
+                "jj_household_density_km2": jj_household_density_km2,
             }
         )
 
@@ -711,6 +749,19 @@ def build_ward_vulnerability_dataset(
         key=lambda w: w["vulnerability_score"],
         reverse=True,
     )
+
+    jj_validation_pairs = [
+        (w["vulnerability_score"], w["jj_household_density_km2"])
+        for w in wards
+        if w["vulnerability_score"] is not None and w["jj_household_density_km2"] is not None
+    ]
+    jj_cluster_correlation_r = (
+        pearson_correlation([p[0] for p in jj_validation_pairs], [p[1] for p in jj_validation_pairs])
+        if len(jj_validation_pairs) > 10
+        else None
+    )
+    wards_with_jj_clusters = sum(1 for w in wards if w["jj_cluster_count"] > 0)
+    total_jj_clusters_matched = sum(w["jj_cluster_count"] for w in wards)
 
     return {
         "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -735,10 +786,25 @@ def build_ward_vulnerability_dataset(
                     "mean_ndvi",
                     "population_density_km2",
                     "vulnerability_score",
+                    "jj_cluster_count",
                 )
             }
             for w in ranked[:20]
         ],
+        "validation": {
+            "jj_cluster_correlation_r": jj_cluster_correlation_r,
+            "wards_with_jj_clusters": wards_with_jj_clusters,
+            "total_jj_clusters_matched": total_jj_clusters_matched,
+            "source_note": (
+                "DUSIB (Delhi Urban Shelter Improvement Board) JJ cluster boundaries, "
+                "via yashveeeeeeer/india-geodata (CC0). 685 mapped clusters, "
+                "spatially joined to wards by cluster centroid. This correlation is a "
+                "sanity check on the exposure-only vulnerability score above — not a "
+                "score input, and not proof of causation. The DUSIB list reflects "
+                "officially recognized/mapped clusters as of its last update, not "
+                "necessarily every informal settlement in Delhi."
+            ),
+        },
     }
 
 
@@ -915,7 +981,7 @@ def main() -> None:
 
     try:
         ward_fc = load_ward_features(workspace)
-        ward_output = build_ward_vulnerability_dataset(region, ward_fc, lst_image, ndvi_image)
+        ward_output = build_ward_vulnerability_dataset(region, ward_fc, lst_image, ndvi_image, workspace)
         with open(os.path.join(out_dir, "ward_vulnerability.json"), "w", encoding="utf-8") as f:
             json.dump(ward_output, f, ensure_ascii=True)
         print(f"Wrote ward_vulnerability.json for {len(ward_output['wards'])} wards")

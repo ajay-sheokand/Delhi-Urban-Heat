@@ -35,7 +35,7 @@ map.on("load", async () => {
     setupTabs();
     document.getElementById("data-updated").textContent = "Loading map data…";
     document.getElementById("heat-alerts-list").textContent = "Loading weather…";
-    await Promise.all([loadMapLayers(), loadDistrictBoundaries(), loadWardBoundaries(), loadTimeSeries()]);
+    await Promise.all([loadMapLayers(), loadDistrictBoundaries(), loadWardBoundaries(), loadJJClusters(), loadTimeSeries()]);
     loadWeather();
 });
 
@@ -261,6 +261,54 @@ async function loadWardBoundaries() {
                <span class="muted">Air temperature is district-level only — see the boundary below.</span>`
             : `<strong>${name}</strong><br/>Ward analytics unavailable.`;
 
+        new maplibregl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+}
+
+async function loadJJClusters() {
+    let geojson;
+    try {
+        const res = await fetch("delhi_jj_clusters.geojson", { cache: "no-store" });
+        geojson = await res.json();
+    } catch (err) {
+        console.error("Failed to load delhi_jj_clusters.geojson", err);
+        showErrorBanner("Informal settlement boundaries unavailable — try reloading.");
+        return;
+    }
+
+    map.addSource("jj-clusters", { type: "geojson", data: geojson });
+    map.addLayer({
+        id: "jj-cluster-fill",
+        type: "fill",
+        source: "jj-clusters",
+        paint: { "fill-color": "#8b4513", "fill-opacity": 0.45 },
+        layout: { visibility: "none" },
+    });
+    map.addLayer({
+        id: "jj-cluster-lines",
+        type: "line",
+        source: "jj-clusters",
+        paint: { "line-color": "#5a2d0c", "line-width": 1, "line-opacity": 0.8 },
+        layout: { visibility: "none" },
+    });
+
+    document.getElementById("toggle-jj-clusters").addEventListener("change", (e) => {
+        const visibility = e.target.checked ? "visible" : "none";
+        map.setLayoutProperty("jj-cluster-fill", "visibility", visibility);
+        map.setLayoutProperty("jj-cluster-lines", "visibility", visibility);
+    });
+
+    map.on("mouseenter", "jj-cluster-fill", () => (map.getCanvas().style.cursor = "pointer"));
+    map.on("mouseleave", "jj-cluster-fill", () => (map.getCanvas().style.cursor = ""));
+
+    map.on("click", "jj-cluster-fill", (e) => {
+        const props = e.features[0].properties;
+        const households = props.approx_households;
+        const html = `<strong>${props.slum_name}</strong><br/>
+            Ward: ${props.ward_name}<br/>
+            Approx. households: ${households != null ? Number(households).toLocaleString() : "N/A"}<br/>
+            Land-owning agency: ${props.land_owning_agency || "N/A"}<br/>
+            <span class="muted">Source: DUSIB (Delhi Urban Shelter Improvement Board)</span>`;
         new maplibregl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
 }

@@ -104,9 +104,61 @@ async function loadWardVulnerability() {
             (w) =>
                 `<tr><td>${w.ward_name}</td><td>${fmt(w.mean_lst_c)}</td><td>${fmt(w.mean_ndvi, 3)}</td><td>${
                     w.population_density_km2 != null ? Math.round(w.population_density_km2).toLocaleString() : "N/A"
-                }</td><td>${fmt(w.vulnerability_score, 1)}</td></tr>`
+                }</td><td>${fmt(w.vulnerability_score, 1)}</td><td>${w.jj_cluster_count ?? 0}</td></tr>`
         )
         .join("");
+
+    renderJJClusterSection(data);
+}
+
+function renderJJClusterSection(data) {
+    const validation = data.validation || {};
+    const wards = data.wards || [];
+
+    const rEl = document.getElementById("jj-correlation-value");
+    if (rEl) {
+        rEl.textContent =
+            validation.jj_cluster_correlation_r !== null && validation.jj_cluster_correlation_r !== undefined
+                ? `r = ${validation.jj_cluster_correlation_r.toFixed(2)}`
+                : "unavailable";
+    }
+
+    document.getElementById("jj-cluster-meta").textContent = validation.total_jj_clusters_matched
+        ? `${validation.total_jj_clusters_matched} JJ clusters matched to ${validation.wards_with_jj_clusters} of ${wards.length} wards`
+        : "";
+
+    const points = wards
+        .filter((w) => w.vulnerability_score !== null && w.jj_household_density_km2 !== null && w.jj_household_density_km2 !== undefined)
+        .map((w) => ({ x: w.vulnerability_score, y: w.jj_household_density_km2, name: w.ward_name }));
+
+    new Chart(document.getElementById("jj-cluster-scatter-chart"), {
+        type: "scatter",
+        data: {
+            datasets: [
+                {
+                    label: "Wards",
+                    data: points,
+                    backgroundColor: "rgba(139,69,19,0.55)",
+                    pointRadius: 4,
+                },
+            ],
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => `${ctx.raw.name}: score ${ctx.raw.x.toFixed(1)}, JJ household density ${Math.round(ctx.raw.y).toLocaleString()}/km²`,
+                    },
+                },
+            },
+            scales: {
+                x: { title: { display: true, text: "Vulnerability score" } },
+                y: { title: { display: true, text: "JJ-cluster household density (/km²)" } },
+            },
+        },
+    });
 }
 
 async function loadLongTermTrends(landCoverColors) {

@@ -98,10 +98,35 @@
         <div class="data-table-wrap">
             <table class="data-table" id="ward-vulnerability-table">
                 <thead>
-                    <tr><th>Ward</th><th>LST (°C)</th><th>NDVI</th><th>Population Density (/km²)</th><th>Vulnerability Score</th></tr>
+                    <tr><th>Ward</th><th>LST (°C)</th><th>NDVI</th><th>Population Density (/km²)</th><th>Vulnerability Score</th><th>JJ Clusters</th></tr>
                 </thead>
                 <tbody></tbody>
             </table>
+        </div>
+
+        <h2 class="section-title">Informal Settlements: A Complementary Risk Layer</h2>
+        <p class="muted">
+            Delhi's official JJ (Jhuggi-Jhopri) clusters — squatter settlements on public land, mapped by DUSIB
+            (Delhi Urban Shelter Improvement Board) — are a separate housing category from the general
+            heat/vegetation/density signal the vulnerability score above is built from. We checked whether the two
+            actually line up, expecting some overlap. They mostly don't: the correlation between vulnerability score
+            and JJ-cluster household density across all 290 wards is <strong id="jj-correlation-value">—</strong>,
+            and most of the top-ranked wards by vulnerability score (the dense, hot, green-poor Northeast Delhi belt)
+            contain <strong>zero</strong> officially mapped JJ clusters. That's not a data error — Delhi's dense
+            unplanned housing spans several distinct legal categories (JJ clusters, unauthorized colonies, urban
+            villages), and DUSIB's list covers only one of them. The practical implication: a ward can score low here
+            on satellite-visible heat and density while still containing residents facing real housing-specific risk
+            (informal construction, no piped water or drainage, insecure tenure) that LST/NDVI/population data simply
+            cannot see. Treat this layer as <em>additional</em> information about who is at risk, not as a check on
+            whether the score above is "correct." See the map's "Informal Settlements" layer to click into individual
+            clusters.
+        </p>
+        <div id="jj-cluster-meta" class="muted"></div>
+        <div class="chart-grid">
+            <div class="chart-card">
+                <h3>Vulnerability Score vs JJ-Cluster Household Density, by Ward</h3>
+                <canvas id="jj-cluster-scatter-chart"></canvas>
+            </div>
         </div>
 
         <h2 class="section-title">Land Cover Statistics</h2>
