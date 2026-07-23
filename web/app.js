@@ -163,8 +163,8 @@ let photorealisticOverlay = null;
 function buildPhotorealisticLayer() {
     return new deck.Tile3DLayer({
         id: "google-photorealistic-3d-tiles",
-        data: `https://assets.cesium.com/${GOOGLE_PHOTOREALISTIC_3D_TILES_ASSET_ID}/tileset.json`,
-        loader: loaders.CesiumIonLoader,
+        data: `https://assets.ion.cesium.com/${GOOGLE_PHOTOREALISTIC_3D_TILES_ASSET_ID}/tileset.json`,
+        loaders: [loaders.CesiumIonLoader],
         loadOptions: { "cesium-ion": { accessToken: CESIUM_ION_TOKEN } },
     });
 }
