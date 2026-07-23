@@ -189,6 +189,11 @@ function hexToRgb(hex, alpha) {
 // GeoJsonLayers in the same interleaved overlay with { depthCompare: "always" } (deck.gl
 // 9.1+ renamed the old depthTest:false parameter to align with WebGPU), which bypasses
 // depth comparison entirely instead of relying on draw order.
+// Drawn at half opacity (on top of each layer's own per-color alpha) so the photorealistic
+// mesh underneath - kept fully opaque itself - still reads through the data, rather than
+// the data fully hiding it wherever it's toggled on.
+const PHOTOREALISTIC_OVERLAY_OPACITY = 0.5;
+
 function buildBoundaryOverlayLayers() {
     const layers = [];
     if (districtGeojsonCache) {
@@ -200,6 +205,7 @@ function buildBoundaryOverlayLayers() {
                 stroked: true,
                 getLineColor: hexToRgb("#2c3e50", 230),
                 lineWidthMinPixels: 1.5,
+                opacity: PHOTOREALISTIC_OVERLAY_OPACITY,
                 visible: document.getElementById("toggle-districts").checked,
                 parameters: { depthCompare: "always", depthWriteEnabled: false },
             })
@@ -219,6 +225,7 @@ function buildBoundaryOverlayLayers() {
                 lineWidthUnits: "pixels",
                 getLineWidth: 2.5,
                 lineWidthMinPixels: 2.5,
+                opacity: PHOTOREALISTIC_OVERLAY_OPACITY,
                 visible: document.getElementById("toggle-wards").checked,
                 parameters: { depthCompare: "always", depthWriteEnabled: false },
             })
@@ -238,6 +245,7 @@ function buildBoundaryOverlayLayers() {
                 getPointRadius: 4,
                 pointRadiusUnits: "pixels",
                 lineWidthMinPixels: 1,
+                opacity: PHOTOREALISTIC_OVERLAY_OPACITY,
                 visible: document.getElementById("toggle-jj-clusters").checked,
                 parameters: { depthCompare: "always", depthWriteEnabled: false },
             })
@@ -280,7 +288,9 @@ function buildRasterOverlayLayers() {
                 minZoom: 0,
                 maxZoom: 19,
                 tileSize: 256,
-                opacity: cached.opacity,
+                // Half opacity here specifically (over the mesh), not cached.opacity - that's
+                // the flat-map value and unrelated to how this should look over Photorealistic 3D.
+                opacity: PHOTOREALISTIC_OVERLAY_OPACITY,
                 visible: checkbox.checked,
                 parameters: { depthCompare: "always", depthWriteEnabled: false },
                 getTileData: fetchTileImage,
@@ -312,13 +322,6 @@ function syncBoundaryOverlayLayers() {
 // from Google rather than hosting them). Workaround: resolve the real tile.googleapis.com URL
 // ourselves via the ion endpoint API, then hand that directly to Tile3DLayer with the plain
 // Tiles3DLoader — no ion-specific loader needed once we already have a real URL.
-// Translucent rather than a fully solid surface, so the flat map (base tiles, and any
-// LST/NDVI/land-cover layer not toggled on) still shows through the mesh itself, not just
-// through the depth-disabled data/boundary overlays drawn on top of it (buildRasterOverlayLayers,
-// buildBoundaryOverlayLayers). `parameters.blend` is forced on since deck.gl composites 3D-tile
-// content largely opaque by default and a plain `opacity` prop alone isn't reliably respected.
-const PHOTOREALISTIC_3D_OPACITY = 0.6;
-
 async function buildPhotorealisticLayer() {
     const res = await fetch(
         `https://api.cesium.com/v1/assets/${GOOGLE_PHOTOREALISTIC_3D_TILES_ASSET_ID}/endpoint?access_token=${CESIUM_ION_TOKEN}`
@@ -329,8 +332,6 @@ async function buildPhotorealisticLayer() {
         id: "google-photorealistic-3d-tiles",
         data: endpoint.options.url,
         loaders: [loaders.Tiles3DLoader],
-        opacity: PHOTOREALISTIC_3D_OPACITY,
-        parameters: { blend: true },
     });
 }
 
