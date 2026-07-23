@@ -7,6 +7,8 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%8C%A1%EF%B8%8F</text></svg>" />
     <script src="https://unpkg.com/maplibre-gl@3.x/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.x/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://unpkg.com/deck.gl@9/dist.min.js"></script>
+    <script src="https://unpkg.com/@loaders.gl/3d-tiles@4/dist/dist.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <link rel="stylesheet" href="style.css" />
     <script src="city.js"></script>
@@ -37,6 +39,7 @@
         <label><input type="checkbox" id="toggle-jj-clusters" /> <span id="toggle-complementary-label">🏘️ Informal Settlements (685, click to inspect)</span></label>
         <label><input type="checkbox" id="toggle-weather" checked /> 🌤️ Weather Markers</label>
         <label><input type="checkbox" id="toggle-3d-buildings" /> 🏢 3D Buildings (zoom in to see)</label>
+        <label><input type="checkbox" id="toggle-photorealistic-3d" /> 📷 Photorealistic 3D (Google, beta — replaces map view)</label>
     </div>
 
     <div class="legend" id="legend-lst">

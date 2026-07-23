@@ -1,5 +1,14 @@
+// Cesium ion access token (free-tier, non-commercial). Public/client-side by design —
+// Cesium ion tokens are meant to be restricted by domain in the ion dashboard, not kept secret.
+const CESIUM_ION_TOKEN =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJkZmU1ODk5OC01ODVjLTQ1NWUtOWFjMy1iMDcxNzBjMjc1ODciLCJpZCI6NDIxMjI0LCJzdWIiOiJhamF5LXNoZW9rYW5kIiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6ImRlbGhpX3VyYmFuX2hlYXQiLCJpYXQiOjE3ODQ4MjM4MjF9.X00X5mHCuYALTdikkDbMhF8EfKhONHKVnhoGc5Jloe4";
+// Cesium ion's fixed, account-shared asset ID for Google Photorealistic 3D Tiles
+// (confirmed against the live ion API, not assumed).
+const GOOGLE_PHOTOREALISTIC_3D_TILES_ASSET_ID = 2275207;
+
 const map = new maplibregl.Map({
     container: "map",
+    attributionControl: false,
     style: {
         version: 8,
         sources: {
@@ -44,6 +53,11 @@ const map = new maplibregl.Map({
 });
 
 map.addControl(new maplibregl.NavigationControl(), "bottom-right");
+map.addControl(
+    new maplibregl.AttributionControl({
+        customAttribution: ["3D Tiles: Google, via Cesium ion"],
+    })
+);
 
 function showErrorBanner(message) {
     const container = document.getElementById("index-error-banner");
@@ -70,6 +84,7 @@ map.on("load", async () => {
     applyCityChrome();
     setupTabs();
     wireBuildingsToggle();
+    wirePhotorealisticToggle();
     document.getElementById("data-updated").textContent = "Loading map data…";
     document.getElementById("heat-alerts-list").textContent = "Loading weather…";
     await Promise.all([loadMapLayers(), loadDistrictBoundaries(), loadWardBoundaries(), loadComplementaryLayer(), loadTimeSeries()]);
@@ -138,6 +153,35 @@ function wireBuildingsToggle() {
         if (checkbox.checked) {
             map.easeTo({ pitch: 60, zoom: Math.max(map.getZoom(), 15), duration: 1000 });
         } else {
+            map.easeTo({ pitch: 0, duration: 1000 });
+        }
+    });
+}
+
+let photorealisticOverlay = null;
+
+function buildPhotorealisticLayer() {
+    return new deck.Tile3DLayer({
+        id: "google-photorealistic-3d-tiles",
+        data: `https://assets.cesium.com/${GOOGLE_PHOTOREALISTIC_3D_TILES_ASSET_ID}/tileset.json`,
+        loader: loaders.CesiumIonLoader,
+        loadOptions: { "cesium-ion": { accessToken: CESIUM_ION_TOKEN } },
+    });
+}
+
+function wirePhotorealisticToggle() {
+    const checkbox = document.getElementById("toggle-photorealistic-3d");
+    if (!checkbox) return;
+    checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+            if (!photorealisticOverlay) {
+                photorealisticOverlay = new deck.MapboxOverlay({ interleaved: true, layers: [] });
+                map.addControl(photorealisticOverlay);
+            }
+            photorealisticOverlay.setProps({ layers: [buildPhotorealisticLayer()] });
+            map.easeTo({ pitch: 60, zoom: Math.max(map.getZoom(), 16), duration: 1000 });
+        } else {
+            if (photorealisticOverlay) photorealisticOverlay.setProps({ layers: [] });
             map.easeTo({ pitch: 0, duration: 1000 });
         }
     });
