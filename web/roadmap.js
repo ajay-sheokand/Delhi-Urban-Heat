@@ -10,6 +10,14 @@ function daysBetween(a, b) {
     return Math.round((b - a) / (1000 * 60 * 60 * 24));
 }
 
+function showErrorBanner(message) {
+    const container = document.getElementById("roadmap-error-banner");
+    const div = document.createElement("div");
+    div.className = "error-banner";
+    div.textContent = message;
+    container.appendChild(div);
+}
+
 async function main() {
     let data;
     try {
@@ -17,7 +25,8 @@ async function main() {
         data = await res.json();
     } catch (err) {
         console.error("Failed to load timeseries_scenes.json", err);
-        document.getElementById("gap-stats").textContent = "Data unavailable.";
+        document.getElementById("gap-stats").textContent = "";
+        showErrorBanner("Data unavailable — try reloading.");
         return;
     }
 

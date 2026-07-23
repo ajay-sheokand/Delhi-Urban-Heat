@@ -23,8 +23,18 @@ const map = new maplibregl.Map({
 
 map.addControl(new maplibregl.NavigationControl(), "bottom-right");
 
+function showErrorBanner(message) {
+    const container = document.getElementById("index-error-banner");
+    const div = document.createElement("div");
+    div.className = "error-banner";
+    div.textContent = message;
+    container.appendChild(div);
+}
+
 map.on("load", async () => {
     setupTabs();
+    document.getElementById("data-updated").textContent = "Loading map data…";
+    document.getElementById("heat-alerts-list").textContent = "Loading weather…";
     await Promise.all([loadMapLayers(), loadDistrictBoundaries(), loadTimeSeries()]);
     loadWeather();
 });
@@ -36,6 +46,8 @@ async function loadMapLayers() {
         data = await res.json();
     } catch (err) {
         console.error("Failed to load map_layers.json", err);
+        document.getElementById("data-updated").textContent = "";
+        showErrorBanner("Map layers unavailable — try reloading.");
         return;
     }
 
@@ -122,6 +134,12 @@ function renderLandCoverLegend(classes, histogram) {
     layoutLegends();
 }
 
+function titleCase(str) {
+    return (str || "")
+        .toLowerCase()
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 async function loadDistrictBoundaries() {
     let geojson;
     try {
@@ -129,10 +147,17 @@ async function loadDistrictBoundaries() {
         geojson = await res.json();
     } catch (err) {
         console.error("Failed to load delhi_admin.geojson", err);
+        showErrorBanner("District boundaries unavailable — try reloading.");
         return;
     }
 
     map.addSource("districts", { type: "geojson", data: geojson });
+    map.addLayer({
+        id: "district-fill",
+        type: "fill",
+        source: "districts",
+        paint: { "fill-color": "#000000", "fill-opacity": 0 },
+    });
     map.addLayer({
         id: "district-lines",
         type: "line",
@@ -141,11 +166,52 @@ async function loadDistrictBoundaries() {
     });
 
     document.getElementById("toggle-districts").addEventListener("change", (e) => {
-        map.setLayoutProperty("district-lines", "visibility", e.target.checked ? "visible" : "none");
+        const visibility = e.target.checked ? "visible" : "none";
+        map.setLayoutProperty("district-lines", "visibility", visibility);
+        map.setLayoutProperty("district-fill", "visibility", visibility);
+    });
+
+    map.on("mouseenter", "district-fill", () => (map.getCanvas().style.cursor = "pointer"));
+    map.on("mouseleave", "district-fill", () => (map.getCanvas().style.cursor = ""));
+
+    let districtStats = [];
+    try {
+        const res = await fetch("district_analytics.json", { cache: "no-store" });
+        const data = await res.json();
+        districtStats = data.districts || [];
+    } catch (err) {
+        console.error("Failed to load district_analytics.json", err);
+    }
+
+    map.on("click", "district-fill", (e) => {
+        const props = e.features[0].properties;
+        const rawName = props.District || props.Name || "Unknown";
+        const name = titleCase(rawName);
+        const stats = districtStats.find((d) => d.name === name);
+
+        const html = stats
+            ? `<strong>${name}</strong><br/>
+               LST: ${fmtC(stats.mean_lst_c)} · NDVI: ${fmtNum(stats.mean_ndvi, 3)}<br/>
+               Air Temp: ${fmtC(stats.air_temp_c)}<br/>
+               Air UHI: ${fmtC(stats.uhi_air_c, true)} · Surface UHI: ${fmtC(stats.uhi_surface_c, true)}`
+            : `<strong>${name}</strong><br/>District analytics unavailable.`;
+
+        new maplibregl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
 }
 
+function fmtC(value, showSign = false) {
+    if (value === null || value === undefined || Number.isNaN(value)) return "N/A";
+    const sign = showSign && value > 0 ? "+" : "";
+    return `${sign}${value.toFixed(1)}°C`;
+}
+
+function fmtNum(value, digits) {
+    return value === null || value === undefined || Number.isNaN(value) ? "N/A" : value.toFixed(digits);
+}
+
 let lstChart = null;
+let allTimeSeriesRecords = [];
 
 async function loadTimeSeries() {
     let data;
@@ -154,19 +220,28 @@ async function loadTimeSeries() {
         data = await res.json();
     } catch (err) {
         console.error("Failed to load timeseries_scenes.json", err);
+        showErrorBanner("Time series data unavailable — try reloading.");
         return;
     }
 
-    const records = (data.records || []).filter((r) => r.mean_lst_c !== null && r.mean_lst_c !== undefined);
+    allTimeSeriesRecords = (data.records || []).filter((r) => r.mean_lst_c !== null && r.mean_lst_c !== undefined);
+
+    const startInput = document.getElementById("ts-start-date");
+    const endInput = document.getElementById("ts-end-date");
+    startInput.min = endInput.min = data.coverage_start || "";
+    startInput.max = endInput.max = data.coverage_end || "";
+    startInput.value = data.coverage_start || "";
+    endInput.value = data.coverage_end || "";
+
     const ctx = document.getElementById("lst-chart").getContext("2d");
     lstChart = new Chart(ctx, {
         type: "line",
         data: {
-            labels: records.map((r) => r.date),
+            labels: [],
             datasets: [
                 {
                     label: "Mean LST (°C)",
-                    data: records.map((r) => r.mean_lst_c),
+                    data: [],
                     borderColor: "#ff6b00",
                     backgroundColor: "rgba(255,107,0,0.1)",
                     pointRadius: 0,
@@ -185,6 +260,23 @@ async function loadTimeSeries() {
             plugins: { legend: { display: false } },
         },
     });
+
+    applyTimeSeriesDateFilter();
+
+    startInput.addEventListener("change", applyTimeSeriesDateFilter);
+    endInput.addEventListener("change", applyTimeSeriesDateFilter);
+}
+
+function applyTimeSeriesDateFilter() {
+    if (!lstChart) return;
+    const start = document.getElementById("ts-start-date").value;
+    const end = document.getElementById("ts-end-date").value;
+
+    const filtered = allTimeSeriesRecords.filter((r) => (!start || r.date >= start) && (!end || r.date <= end));
+
+    lstChart.data.labels = filtered.map((r) => r.date);
+    lstChart.data.datasets[0].data = filtered.map((r) => r.mean_lst_c);
+    lstChart.update();
 }
 
 async function loadWeather() {

@@ -22,6 +22,14 @@ function statCard(label, value, sub, accentClass) {
     }</div>`;
 }
 
+function showErrorBanner(message) {
+    const container = document.getElementById("analytics-error-banner");
+    const div = document.createElement("div");
+    div.className = "error-banner";
+    div.textContent = message;
+    container.appendChild(div);
+}
+
 async function main() {
     let analytics, mapLayers;
     try {
@@ -33,7 +41,8 @@ async function main() {
         mapLayers = await mapLayersRes.json();
     } catch (err) {
         console.error("Failed to load analytics data", err);
-        document.getElementById("summary-stats").textContent = "Analytics data unavailable.";
+        document.getElementById("summary-stats").textContent = "";
+        showErrorBanner("Analytics data unavailable — try reloading.");
         return;
     }
 
@@ -49,6 +58,114 @@ async function main() {
     renderScatterCharts(analytics);
     renderLandCoverCharts(analytics, landCoverColors);
     renderTables(analytics);
+    loadLongTermTrends(landCoverColors);
+}
+
+async function loadLongTermTrends(landCoverColors) {
+    let timeseries = null;
+    let historical = null;
+
+    try {
+        const res = await fetch("timeseries_scenes.json", { cache: "no-store" });
+        timeseries = await res.json();
+    } catch (err) {
+        console.error("Failed to load timeseries_scenes.json", err);
+    }
+
+    try {
+        const res = await fetch("historical_trends.json", { cache: "no-store" });
+        historical = await res.json();
+    } catch (err) {
+        console.error("Failed to load historical_trends.json", err);
+    }
+
+    if (!timeseries && !historical) {
+        showErrorBanner("Long-term trend data unavailable — try reloading.");
+        return;
+    }
+
+    if (timeseries) renderLongTermLstChart(timeseries);
+    if (historical) renderLongTermLulcChart(historical, landCoverColors);
+}
+
+function renderLongTermLstChart(timeseries) {
+    const records = (timeseries.records || []).filter((r) => r.mean_lst_c !== null && r.mean_lst_c !== undefined);
+    const byMonth = {};
+    records.forEach((r) => {
+        const month = r.date.slice(0, 7);
+        (byMonth[month] = byMonth[month] || []).push(r.mean_lst_c);
+    });
+    const months = Object.keys(byMonth).sort();
+    const means = months.map((m) => byMonth[m].reduce((a, b) => a + b, 0) / byMonth[m].length);
+
+    const trendPoints = means.map((y, i) => ({ x: i, y }));
+    const trend = linearRegression(trendPoints);
+
+    const datasets = [
+        {
+            label: "Monthly mean LST (°C)",
+            data: means,
+            borderColor: "#ff6b00",
+            backgroundColor: "rgba(255,107,0,0.1)",
+            pointRadius: 2,
+            borderWidth: 2,
+            tension: 0.15,
+        },
+    ];
+    if (trend) {
+        datasets.push({
+            label: "Trend",
+            data: months.map((_, i) => trend.slope * i + trend.intercept),
+            borderColor: "#111",
+            borderWidth: 2,
+            borderDash: [6, 4],
+            pointRadius: 0,
+        });
+    }
+
+    new Chart(document.getElementById("long-term-lst-chart"), {
+        type: "line",
+        data: { labels: months, datasets },
+        options: {
+            responsive: true,
+            scales: {
+                x: { ticks: { maxTicksLimit: 10, font: { size: 10 } } },
+                y: { title: { display: true, text: "°C" } },
+            },
+        },
+    });
+}
+
+function renderLongTermLulcChart(historical, landCoverColors) {
+    const rows = historical.monthly_land_cover_lst || [];
+    const months = [...new Set(rows.map((r) => r.month))].sort();
+    const landCoverNames = [...new Set(rows.map((r) => r.land_cover))];
+
+    const datasets = landCoverNames.map((name) => {
+        const byMonth = {};
+        rows.filter((r) => r.land_cover === name).forEach((r) => (byMonth[r.month] = r.mean_lst_c));
+        return {
+            label: name,
+            data: months.map((m) => (m in byMonth ? byMonth[m] : null)),
+            borderColor: landCoverColors[name] || "#999",
+            backgroundColor: landCoverColors[name] || "#999",
+            spanGaps: true,
+            pointRadius: 2,
+            borderWidth: 2,
+        };
+    });
+
+    new Chart(document.getElementById("long-term-lulc-chart"), {
+        type: "line",
+        data: { labels: months, datasets },
+        options: {
+            responsive: true,
+            scales: {
+                x: { ticks: { maxTicksLimit: 10, font: { size: 10 } } },
+                y: { title: { display: true, text: "Mean LST (°C)" } },
+            },
+        },
+    });
 }
 
 function renderSummary(analytics) {

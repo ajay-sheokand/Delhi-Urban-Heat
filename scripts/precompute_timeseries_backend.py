@@ -578,6 +578,90 @@ def build_district_analytics_dataset(
     }
 
 
+def should_run_weekly_job() -> bool:
+    """True only on the first 6-hourly cron run of the week (Monday 00:xx UTC)."""
+    now = datetime.utcnow()
+    return now.weekday() == 0 and now.hour < 6
+
+
+def _month_starts(start_dt, end_dt) -> list:
+    months = []
+    cursor = start_dt.replace(day=1)
+    while cursor <= end_dt:
+        months.append(cursor)
+        if cursor.month == 12:
+            cursor = cursor.replace(year=cursor.year + 1, month=1)
+        else:
+            cursor = cursor.replace(month=cursor.month + 1)
+    return months
+
+
+def build_historical_trends_dataset(region: ee.Geometry) -> dict:
+    """LST-by-land-cover, one monthly median composite at a time, over the
+    full PRECOMPUTE_DAYS history — too expensive to run every 6h (~24 EE
+    calls vs. the few-scene short window elsewhere), so main() only calls
+    this on a weekly cadence via should_run_weekly_job()."""
+    days_back = int(os.environ.get("PRECOMPUTE_DAYS", "730"))
+    end_dt = datetime.utcnow().date()
+    start_dt = end_dt - timedelta(days=days_back)
+
+    worldcover_ts = ee.ImageCollection("ESA/WorldCover/v200").first().select("Map").rename("LandCover")
+
+    rows = []
+    for month_start in _month_starts(start_dt, end_dt):
+        month_end = (
+            month_start.replace(year=month_start.year + 1, month=1)
+            if month_start.month == 12
+            else month_start.replace(month=month_start.month + 1)
+        )
+        month_end = min(month_end, end_dt)
+
+        collection = get_landsat8_collection(month_start.isoformat(), month_end.isoformat(), region)
+        try:
+            scene_count = collection.size().getInfo()
+            if scene_count == 0:
+                continue
+            composite = collection.select("LST").median()
+            grouped = (
+                composite.addBands(worldcover_ts)
+                .reduceRegion(
+                    reducer=ee.Reducer.mean().group(groupField=1, groupName="landcover"),
+                    geometry=region,
+                    scale=500,
+                    maxPixels=1e9,
+                    bestEffort=True,
+                    tileScale=4,
+                )
+                .get("groups")
+                .getInfo()
+            )
+        except Exception as exc:
+            print(f"Historical trend month {month_start.isoformat()} failed: {exc}")
+            continue
+
+        month_label = month_start.strftime("%Y-%m")
+        for group_item in grouped or []:
+            lc_code_raw, lc_mean = group_item.get("landcover"), group_item.get("mean")
+            if lc_code_raw is None or lc_mean is None:
+                continue
+            lc_code = int(lc_code_raw)
+            rows.append(
+                {
+                    "month": month_label,
+                    "land_cover": WORLDCOVER_NAME_BY_ID.get(lc_code, f"Class {lc_code}"),
+                    "mean_lst_c": float(lc_mean),
+                    "scene_count": scene_count,
+                }
+            )
+
+    return {
+        "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "coverage_start": start_dt.isoformat(),
+        "coverage_end": end_dt.isoformat(),
+        "monthly_land_cover_lst": rows,
+    }
+
+
 def build_weather_dataset() -> dict:
     api_key = os.environ.get("OPENWEATHER_API_KEY", "").strip()
     if not api_key:
@@ -660,6 +744,17 @@ def main() -> None:
         print(f"Wrote district_analytics.json for {len(analytics_output['districts'])} districts")
     except Exception as exc:
         print(f"District analytics precompute failed, leaving previous district_analytics.json in place if any: {exc}")
+
+    if should_run_weekly_job():
+        try:
+            historical_output = build_historical_trends_dataset(region)
+            with open(os.path.join(out_dir, "historical_trends.json"), "w", encoding="utf-8") as f:
+                json.dump(historical_output, f, ensure_ascii=True)
+            print(f"Wrote historical_trends.json ({len(historical_output['monthly_land_cover_lst'])} rows)")
+        except Exception as exc:
+            print(f"Historical trends precompute failed, leaving previous historical_trends.json in place if any: {exc}")
+    else:
+        print("Skipping historical_trends.json this run (weekly job, seeded copy from previous publish stays in place)")
 
     try:
         weather_output = build_weather_dataset()

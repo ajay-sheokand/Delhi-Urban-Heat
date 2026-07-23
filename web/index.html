@@ -18,6 +18,7 @@
         <h1>🌡️ Delhi Urban Heat Monitor</h1>
         <p>Satellite-derived land surface temperature, vegetation and land cover across Delhi's 11 districts. Map layers refresh automatically every 6 hours.</p>
         <div id="data-updated" class="muted"></div>
+        <div id="index-error-banner"></div>
         <div class="panel-nav">
             <a href="analytics.html">📊 Full Analytics</a>
             <a href="roadmap.html">🛰️ Roadmap</a>
@@ -56,6 +57,10 @@
             <button class="tab-btn" data-tab="alerts">🔥 Heat Alerts</button>
         </div>
         <div class="tab-content" id="tab-chart">
+            <div class="date-range-controls">
+                <label>From <input type="date" id="ts-start-date" /></label>
+                <label>To <input type="date" id="ts-end-date" /></label>
+            </div>
             <canvas id="lst-chart" height="90"></canvas>
         </div>
         <div class="tab-content" id="tab-alerts" style="display:none;">

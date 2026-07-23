@@ -22,11 +22,13 @@
             <h1>📊 District Analytics</h1>
             <p>Urban heat island intensity, vegetation-temperature correlation, and land-cover composition across Delhi's 11 districts. Computed server-side from a rolling satellite/weather window and refreshed every 6 hours — not a live per-visit computation.</p>
             <div id="data-updated" class="muted"></div>
+            <div id="analytics-error-banner"></div>
         </div>
 
-        <div id="summary-stats" class="stat-grid"></div>
+        <div id="summary-stats" class="stat-grid">Loading analytics…</div>
 
         <h2 class="section-title">Urban Heat Island — Air Temperature</h2>
+        <p class="muted">NASA POWER's air temperature grid is roughly 50km — coarser than Delhi's districts, so district-to-district air-temperature differences below are naturally small. The surface UHI chart (Landsat LST, 100m resolution) is the more spatially meaningful comparison.</p>
         <div class="chart-grid">
             <div class="chart-card">
                 <h3>UHI Intensity by District (deviation from citywide mean air temp)</h3>
@@ -59,6 +61,19 @@
             <div class="chart-card">
                 <h3>LST by Land Cover Type Over Time (current window)</h3>
                 <canvas id="lulc-time-chart"></canvas>
+            </div>
+        </div>
+
+        <h2 class="section-title">Long-Term Trends</h2>
+        <p class="muted">Unlike the charts above (current rolling window), these use the full ~2-year Landsat record. The land-cover trend recomputes weekly rather than every 6 hours — it's a heavier query across the whole history.</p>
+        <div class="chart-grid">
+            <div class="chart-card">
+                <h3>Citywide Mean LST, Monthly (full history)</h3>
+                <canvas id="long-term-lst-chart"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>LST by Land Cover Type, Monthly (full history)</h3>
+                <canvas id="long-term-lulc-chart"></canvas>
             </div>
         </div>
 

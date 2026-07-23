@@ -44,6 +44,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Seed backend-data from previous publish
+        run: |
+          mkdir -p backend-data
+          git fetch origin gh-pages --depth=1 2>/dev/null || true
+          for f in timeseries_scenes.json map_layers.json district_analytics.json weather.json historical_trends.json; do
+            if git show origin/gh-pages:"$f" > "backend-data/$f.tmp" 2>/dev/null; then
+              mv "backend-data/$f.tmp" "backend-data/$f"
+            else
+              rm -f "backend-data/$f.tmp"
+            fi
+          done
+
       - name: Precompute timeseries dataset
         env:
           GEE_SERVICE_ACCOUNT: ${{ secrets.GEE_SERVICE_ACCOUNT }}
