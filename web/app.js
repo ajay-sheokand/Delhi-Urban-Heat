@@ -162,6 +162,18 @@ function wireBuildingsToggle() {
 
 let photorealisticOverlay = null;
 
+// Draping 2D data onto the photorealistic mesh's real geometry (deck.gl's TerrainExtension)
+// is a confirmed, unresolved upstream bug in interleaved mode (visgl/deck.gl#7893) as of this
+// writing - so this is a lighter compromise: just reorder the flat boundary line/fill layers
+// to draw after (on top of) the mesh. Expect some z-fighting/flicker where 3D buildings poke
+// through the flat lines, since this is stack-order reordering, not true surface draping.
+function bringBoundaryLayersToFront() {
+    const boundaryLayerIds = ["district-fill", "district-lines", "ward-fill", "ward-lines", "complementary-fill", "complementary-lines"];
+    for (const id of boundaryLayerIds) {
+        if (map.getLayer(id)) map.moveLayer(id);
+    }
+}
+
 // CesiumIonLoader has a known bug (community-reported) where it only handles Cesium-hosted
 // assets, not "external" ones like Google Photorealistic 3D Tiles (Cesium ion proxies these
 // from Google rather than hosting them). Workaround: resolve the real tile.googleapis.com URL
@@ -192,6 +204,7 @@ function wirePhotorealisticToggle() {
             try {
                 const layer = await buildPhotorealisticLayer();
                 photorealisticOverlay.setProps({ layers: [layer] });
+                bringBoundaryLayersToFront();
                 map.easeTo({ pitch: 60, zoom: Math.max(map.getZoom(), 16), duration: 1000 });
             } catch (err) {
                 console.error("Failed to load photorealistic 3D tiles", err);
