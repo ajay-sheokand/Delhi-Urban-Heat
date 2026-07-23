@@ -579,7 +579,11 @@ def build_district_analytics_dataset(
 
 
 def should_run_weekly_job() -> bool:
-    """True only on the first 6-hourly cron run of the week (Monday 00:xx UTC)."""
+    """True on the first 6-hourly cron run of the week (Monday 00:xx UTC), or
+    whenever manually forced via the workflow_dispatch input (e.g. to backfill
+    on first deploy rather than waiting for the next Monday)."""
+    if os.environ.get("FORCE_HISTORICAL_TRENDS", "").strip().lower() == "true":
+        return True
     now = datetime.utcnow()
     return now.weekday() == 0 and now.hour < 6
 

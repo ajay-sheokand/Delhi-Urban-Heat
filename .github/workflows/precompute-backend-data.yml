@@ -2,6 +2,11 @@ name: Precompute Backend Data
 
 on:
   workflow_dispatch:
+    inputs:
+      force_historical_trends:
+        description: "Recompute historical_trends.json now instead of waiting for the weekly cadence"
+        type: boolean
+        default: false
   schedule:
     - cron: "0 */6 * * *"
 
@@ -62,6 +67,7 @@ jobs:
           GEE_PRIVATE_KEY: ${{ secrets.GEE_PRIVATE_KEY }}
           PRECOMPUTE_DAYS: ${{ secrets.PRECOMPUTE_DAYS }}
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          FORCE_HISTORICAL_TRENDS: ${{ github.event.inputs.force_historical_trends }}
         run: |
           python scripts/precompute_timeseries_backend.py
 

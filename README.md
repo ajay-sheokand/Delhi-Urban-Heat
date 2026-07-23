@@ -70,7 +70,7 @@ All three pull only from the precomputed JSON in `backend-data/` — nothing her
 - `app.py`: legacy Streamlit dashboard (secondary, not linked as the primary app)
 - `delhi_admin.geojson`: Delhi administrative boundaries (used by the static frontend, the precompute script's region geometry, and per-district analytics — each of its 11 features carries a `District` name property)
 - `delhi_admin.kml`: Alternate boundary file
-- `scripts/precompute_timeseries_backend.py`: Precomputes `timeseries_scenes.json` (LST time series), `map_layers.json` (LST/NDVI/land-cover tile URLs), `district_analytics.json` (UHI/correlation/land-cover analytics), and `weather.json` (per-district OpenWeather readings + heat alerts)
+- `scripts/precompute_timeseries_backend.py`: Precomputes `timeseries_scenes.json` (LST time series), `map_layers.json` (LST/NDVI/land-cover tile URLs), `district_analytics.json` (UHI/correlation/land-cover analytics), `weather.json` (per-district OpenWeather readings + heat alerts), and `historical_trends.json` (LST-by-land-cover, monthly, full history — recomputed weekly, not every 6h, since it's a much heavier query; force an immediate recompute via the `force_historical_trends` input on a manual `Run workflow`)
 - `.github/workflows/precompute-backend-data.yml`: Scheduled/manual precompute, then publishes `web/`, `delhi_admin.geojson`, and `backend-data/` to `gh-pages`
 - `requirements.txt`: Python dependencies
 - `runtime.txt`: Python runtime pin
