@@ -30,6 +30,7 @@ Main use case (both cities): map-based heat monitoring, historical analysis, war
 - Land Cover layer (ESA WorldCover)
 - District weather markers and heat alerts (OpenWeather, precomputed every 6h)
 - Time series chart for LST (client-side date-range filter), district, ward, and informal-settlement (JJ cluster) boundary overlays — all click-to-inspect
+- Toggleable 3D building extrusion (OpenFreeMap vector tiles, `building` layer, `render_height`/`render_min_height`), tilts the map to 60° pitch on enable — thematically relevant since building density/height relates to heat retention and the urban canyon effect, not just a visual gimmick. Only renders at zoom ≥14 (the source data's `minzoom`), so enabling it also zooms in if the map is zoomed further out than that.
 
 **Analytics (`analytics.html`)**
 - Urban heat island intensity by district, both air-temperature-based (NASA POWER vs citywide mean) and surface-based (LST vs cropland baseline)
@@ -78,6 +79,7 @@ The site started Delhi-only; Münster was added as a second city with a full pag
 | [`delhi_jj_clusters.geojson`](https://github.com/yashveeeeeeer/india-geodata) | 685 JJ (Jhuggi-Jhopri) informal settlement boundaries | Local file, sourced from DUSIB (Delhi Urban Shelter Improvement Board), via the `india-geodata` GitHub release `urban/boundaries` | [CC0](https://creativecommons.org/publicdomain/zero/1.0/) (public domain) |
 | [Stadt Münster Open Data Portal](https://opendata.stadt-muenster.de/) | 45 ward (Statistische Bezirke) boundaries — `muenster_wards.geojson`; 9 districts (`muenster_districts.geojson`) dissolved from these locally by `STADTBEZIR` | Official city GeoJSON, verified 45/45 valid geometries | Open data, city portal |
 | [Zensus 2022 (Destatis)](https://www.destatis.de/zensus2022) — 100m population-by-age grid | `muenster_elderly_population.geojson`: ages 65+, clipped to Münster and joined to wards | 100m INSPIRE grid, official 2022 federal census | Official German federal statistics |
+| [OpenFreeMap](https://openfreemap.org/) (`https://tiles.openfreemap.org/planet`, OpenMapTiles schema) | Toggleable 3D building extrusion (both cities) | Global OSM-derived vector tiles, `building` layer with `render_height`/`render_min_height`, effective from zoom 14 | Free, unlimited, no API key — data © OpenStreetMap contributors, [ODbL](https://www.openstreetmap.org/copyright) |
 
 `delhi_wards.geojson` reflects the **pre-2022 delimitation** (the three erstwhile municipal corporations + NDMC + Delhi Cantonment) — no open, downloadable geometry file for the current unified 250-ward structure was found. Disclosed here and on the analytics page rather than presented as current.
 
@@ -209,6 +211,7 @@ Both cities compute a "complementary risk layer" through the same generic backen
 - **Heat alerts for Münster are a simplified proxy for DWD's Hitzewarnung system**, using OpenWeather's `feels_like` against DWD's real thresholds rather than the official Klima-Michel model — see [Live Weather & Heat Alerts](#live-weather--heat-alerts).
 - **Münster's elderly-population grid undercounts small-population cells** due to German federal statistical disclosure control suppressing small counts — see [JJ Cluster Overlay & Vulnerability-Score Comparison](#jj-cluster-overlay--vulnerability-score-comparison).
 - **All map layers and analytics reflect the last successful precompute run** (every 6h), not the live moment when a page is loaded — true for both cities.
+- **3D building extrusion relies on crowdsourced OSM building footprints/heights**, which are far more complete for Münster (well-mapped German city) than for Delhi (OSM building coverage in Indian cities is comparatively sparse and inconsistently tagged with height) — expect visibly patchier building coverage in Delhi. Buildings without a `render_height` value fall back to a flat 5m estimate rather than being omitted, so extrusion height for untagged buildings is a placeholder, not a measurement.
 
 ## Project Structure
 

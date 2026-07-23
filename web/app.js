@@ -14,8 +14,29 @@ const map = new maplibregl.Map({
                 tileSize: 256,
                 attribution: "© OpenStreetMap contributors © CARTO",
             },
+            openmaptiles: {
+                type: "vector",
+                url: "https://tiles.openfreemap.org/planet",
+                attribution: "OpenFreeMap © OpenMapTiles Data from OpenStreetMap",
+            },
         },
-        layers: [{ id: "carto-base", type: "raster", source: "carto" }],
+        layers: [
+            { id: "carto-base", type: "raster", source: "carto" },
+            {
+                id: "building-3d",
+                type: "fill-extrusion",
+                source: "openmaptiles",
+                "source-layer": "building",
+                minzoom: 14,
+                layout: { visibility: "none" },
+                paint: {
+                    "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
+                    "fill-extrusion-height": ["coalesce", ["get", "render_height"], 5],
+                    "fill-extrusion-color": "hsl(28, 60%, 60%)",
+                    "fill-extrusion-opacity": 0.85,
+                },
+            },
+        ],
     },
     center: CITY.mapView.center,
     zoom: CITY.mapView.zoom,
@@ -47,6 +68,7 @@ function applyCityChrome() {
 map.on("load", async () => {
     applyCityChrome();
     setupTabs();
+    wireBuildingsToggle();
     document.getElementById("data-updated").textContent = "Loading map data…";
     document.getElementById("heat-alerts-list").textContent = "Loading weather…";
     await Promise.all([loadMapLayers(), loadDistrictBoundaries(), loadWardBoundaries(), loadComplementaryLayer(), loadTimeSeries()]);
@@ -106,6 +128,18 @@ function wireToggle(checkboxId, layerId, legendId) {
         layoutLegends();
     });
     if (legend) legend.style.display = checkbox.checked ? "block" : "none";
+}
+
+function wireBuildingsToggle() {
+    const checkbox = document.getElementById("toggle-3d-buildings");
+    checkbox.addEventListener("change", () => {
+        map.setLayoutProperty("building-3d", "visibility", checkbox.checked ? "visible" : "none");
+        if (checkbox.checked) {
+            map.easeTo({ pitch: 60, zoom: Math.max(map.getZoom(), 15), duration: 1000 });
+        } else {
+            map.easeTo({ pitch: 0, duration: 1000 });
+        }
+    });
 }
 
 function layoutLegends() {
