@@ -661,14 +661,7 @@ def build_ward_vulnerability_dataset(
     pop_rows = (
         worldpop.select("population")
         .unmask(0)
-        .reduceRegions(
-            collection=ward_fc,
-            reducer=ee.Reducer.sum(),
-            scale=100,
-            maxPixels=1e9,
-            bestEffort=True,
-            tileScale=4,
-        )
+        .reduceRegions(collection=ward_fc, reducer=ee.Reducer.sum(), scale=100, tileScale=4)
         .getInfo()
         .get("features", [])
     )
