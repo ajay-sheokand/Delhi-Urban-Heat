@@ -114,6 +114,12 @@ async function loadMapLayers() {
     addRasterLayer("ndvi", ndvi.tile_url, ndvi.opacity, false);
     addRasterLayer("landcover", land_cover.tile_url, land_cover.opacity, false);
 
+    rasterLayerCache = {
+        lst: { tileUrl: lst.tile_url, opacity: lst.opacity },
+        ndvi: { tileUrl: ndvi.tile_url, opacity: ndvi.opacity },
+        landcover: { tileUrl: land_cover.tile_url, opacity: land_cover.opacity },
+    };
+
     renderLstLegend(lst.min, lst.max, lst.palette);
     renderLandCoverLegend(land_cover.classes, land_cover.histogram);
 
@@ -144,6 +150,7 @@ function wireToggle(checkboxId, layerId, legendId) {
         map.setLayoutProperty(layerId, "visibility", checkbox.checked ? "visible" : "none");
         if (legend) legend.style.display = checkbox.checked ? "block" : "none";
         layoutLegends();
+        syncBoundaryOverlayLayers();
     });
     if (legend) legend.style.display = checkbox.checked ? "block" : "none";
 }
@@ -166,6 +173,7 @@ let currentPhotorealisticLayer = null;
 let districtGeojsonCache = null;
 let wardGeojsonCache = null;
 let complementaryGeojsonCache = null;
+let rasterLayerCache = {};
 
 function hexToRgb(hex, alpha) {
     const n = parseInt(hex.replace("#", ""), 16);
@@ -204,8 +212,13 @@ function buildBoundaryOverlayLayers() {
                 data: wardGeojsonCache,
                 filled: false,
                 stroked: true,
-                getLineColor: hexToRgb("#6a3fb5", 180),
-                lineWidthMinPixels: 1,
+                getLineColor: hexToRgb("#6a3fb5", 220),
+                // Fixed pixel width (not the meters-based default) so it reads clearly
+                // thick against the photorealistic mesh at any zoom/pitch, rather than
+                // just skimming the old 1px floor.
+                lineWidthUnits: "pixels",
+                getLineWidth: 2.5,
+                lineWidthMinPixels: 2.5,
                 visible: document.getElementById("toggle-wards").checked,
                 parameters: { depthCompare: "always" },
             })
@@ -233,9 +246,51 @@ function buildBoundaryOverlayLayers() {
     return layers;
 }
 
+// LST/NDVI/land-cover are the same Earth Engine XYZ tile URLs used by the flat MapLibre
+// raster layers (addRasterLayer) - reused here as deck.gl TileLayers, each wrapping
+// BitmapLayer sublayers, with depthCompare: "always" so they draw over the opaque
+// photorealistic mesh instead of being hidden under it like the native MapLibre layers are.
+function buildRasterOverlayLayers() {
+    const specs = [
+        { key: "lst", checkboxId: "toggle-lst" },
+        { key: "ndvi", checkboxId: "toggle-ndvi" },
+        { key: "landcover", checkboxId: "toggle-landcover" },
+    ];
+    const layers = [];
+    specs.forEach(({ key, checkboxId }) => {
+        const cached = rasterLayerCache[key];
+        const checkbox = document.getElementById(checkboxId);
+        if (!cached || !checkbox) return;
+        layers.push(
+            new deck.TileLayer({
+                id: `photoreal-${key}-tiles`,
+                data: cached.tileUrl,
+                minZoom: 0,
+                maxZoom: 19,
+                tileSize: 256,
+                opacity: cached.opacity,
+                visible: checkbox.checked,
+                parameters: { depthCompare: "always" },
+                renderSubLayers: (props) => {
+                    const { bbox } = props.tile;
+                    return new deck.BitmapLayer(props, {
+                        data: null,
+                        image: props.data,
+                        bounds: [bbox.west, bbox.south, bbox.east, bbox.north],
+                        parameters: { depthCompare: "always" },
+                    });
+                },
+            })
+        );
+    });
+    return layers;
+}
+
 function syncBoundaryOverlayLayers() {
     if (!photorealisticActive || !photorealisticOverlay) return;
-    const layers = currentPhotorealisticLayer ? [currentPhotorealisticLayer, ...buildBoundaryOverlayLayers()] : [];
+    const layers = currentPhotorealisticLayer
+        ? [currentPhotorealisticLayer, ...buildRasterOverlayLayers(), ...buildBoundaryOverlayLayers()]
+        : [];
     photorealisticOverlay.setProps({ layers });
 }
 
