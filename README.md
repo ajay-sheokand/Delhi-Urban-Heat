@@ -245,6 +245,7 @@ The static frontend and its data are published together to the `gh-pages` branch
    - `GEE_SERVICE_ACCOUNT`
    - `GEE_PRIVATE_KEY`
    - `OPENWEATHER_API_KEY` — used server-side only, inside the Actions run, to precompute `weather.json`. It is never written into any client-side file.
+   - `CESIUM_ION_TOKEN` — unlike the secrets above, this one **is** written into the published `web/app.js` (a placeholder, `__CESIUM_ION_TOKEN__`, is substituted at publish time) since it powers the client-side Photorealistic 3D map toggle and Cesium ion tokens are designed to be client-visible, restricted by domain rather than kept secret. Kept as a GitHub Actions secret anyway so the raw token isn't sitting in git history / GitHub code search. Get one free at [cesium.com/ion](https://cesium.com/), then restrict it to your GitHub Pages domain in the ion dashboard (Access Tokens -> your token -> URL restriction). Optional — if unset, only the Photorealistic 3D toggle fails (shows an error banner); everything else still works.
    - `PRECOMPUTE_DAYS` (optional, e.g. `730`) — time-series history window
    - `MAP_COMPOSITE_DAYS` and `ANALYTICS_AIR_TEMP_DAYS` are plain env vars with defaults (`45` and `90` respectively) inside `scripts/precompute_timeseries_backend.py` — edit the script if you want different rolling windows; not required secrets.
 2. Ensure GitHub Actions is enabled, then run the workflow: `Actions -> Precompute Backend Data -> Run workflow`.
@@ -327,6 +328,7 @@ The Streamlit app can also read the same precomputed `timeseries_scenes.json` fo
 - Rotate exposed private keys immediately.
 - Prefer GitHub/Streamlit secret managers over plaintext files.
 - `GEE_SERVICE_ACCOUNT`, `GEE_PRIVATE_KEY`, and `OPENWEATHER_API_KEY` must all stay server-side only (GitHub Actions secrets) — none of them are ever written into `web/app.js` or any other client-side file. The static frontend only ever fetches the precomputed JSON output (`map_layers.json`, `district_analytics.json`, `timeseries_scenes.json`, `weather.json`, `ward_vulnerability.json`), never a live third-party API directly.
+- `CESIUM_ION_TOKEN` is the one deliberate exception: it's a client-side-by-design token (powers the Photorealistic 3D map toggle directly from the browser) that ends up in the published `app.js`. It's still stored as a GitHub Actions secret and injected at publish time rather than committed to source, so it doesn't sit in plaintext git history — but real protection against abuse is the URL restriction on the token itself in the Cesium ion dashboard (restrict it to your GitHub Pages domain), not secrecy, since any visitor's browser can read it from the deployed page regardless.
 
 For educational and research use.
 

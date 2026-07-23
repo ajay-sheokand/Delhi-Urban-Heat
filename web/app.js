@@ -1,7 +1,8 @@
 // Cesium ion access token (free-tier, non-commercial). Public/client-side by design —
-// Cesium ion tokens are meant to be restricted by domain in the ion dashboard, not kept secret.
-const CESIUM_ION_TOKEN =
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJkZmU1ODk5OC01ODVjLTQ1NWUtOWFjMy1iMDcxNzBjMjc1ODciLCJpZCI6NDIxMjI0LCJzdWIiOiJhamF5LXNoZW9rYW5kIiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6ImRlbGhpX3VyYmFuX2hlYXQiLCJpYXQiOjE3ODQ4MjM4MjF9.X00X5mHCuYALTdikkDbMhF8EfKhONHKVnhoGc5Jloe4";
+// Cesium ion tokens are meant to be restricted by domain in the ion dashboard, not kept secret —
+// but it's still injected at publish time from a GitHub Actions secret rather than committed in
+// source, so it isn't sitting in plaintext in git history / GitHub code search.
+const CESIUM_ION_TOKEN = "__CESIUM_ION_TOKEN__";
 // Cesium ion's fixed, account-shared asset ID for Google Photorealistic 3D Tiles
 // (confirmed against the live ion API, not assumed).
 const GOOGLE_PHOTOREALISTIC_3D_TILES_ASSET_ID = 2275207;
@@ -160,26 +161,42 @@ function wireBuildingsToggle() {
 
 let photorealisticOverlay = null;
 
-function buildPhotorealisticLayer() {
+// CesiumIonLoader has a known bug (community-reported) where it only handles Cesium-hosted
+// assets, not "external" ones like Google Photorealistic 3D Tiles (Cesium ion proxies these
+// from Google rather than hosting them). Workaround: resolve the real tile.googleapis.com URL
+// ourselves via the ion endpoint API, then hand that directly to Tile3DLayer with the plain
+// Tiles3DLoader — no ion-specific loader needed once we already have a real URL.
+async function buildPhotorealisticLayer() {
+    const res = await fetch(
+        `https://api.cesium.com/v1/assets/${GOOGLE_PHOTOREALISTIC_3D_TILES_ASSET_ID}/endpoint?access_token=${CESIUM_ION_TOKEN}`
+    );
+    if (!res.ok) throw new Error(`Cesium ion endpoint request failed: ${res.status}`);
+    const endpoint = await res.json();
     return new deck.Tile3DLayer({
         id: "google-photorealistic-3d-tiles",
-        data: `https://assets.ion.cesium.com/${GOOGLE_PHOTOREALISTIC_3D_TILES_ASSET_ID}/tileset.json`,
-        loaders: [loaders.CesiumIonLoader],
-        loadOptions: { "cesium-ion": { accessToken: CESIUM_ION_TOKEN } },
+        data: endpoint.options.url,
+        loaders: [loaders.Tiles3DLoader],
     });
 }
 
 function wirePhotorealisticToggle() {
     const checkbox = document.getElementById("toggle-photorealistic-3d");
     if (!checkbox) return;
-    checkbox.addEventListener("change", () => {
+    checkbox.addEventListener("change", async () => {
         if (checkbox.checked) {
             if (!photorealisticOverlay) {
                 photorealisticOverlay = new deck.MapboxOverlay({ interleaved: true, layers: [] });
                 map.addControl(photorealisticOverlay);
             }
-            photorealisticOverlay.setProps({ layers: [buildPhotorealisticLayer()] });
-            map.easeTo({ pitch: 60, zoom: Math.max(map.getZoom(), 16), duration: 1000 });
+            try {
+                const layer = await buildPhotorealisticLayer();
+                photorealisticOverlay.setProps({ layers: [layer] });
+                map.easeTo({ pitch: 60, zoom: Math.max(map.getZoom(), 16), duration: 1000 });
+            } catch (err) {
+                console.error("Failed to load photorealistic 3D tiles", err);
+                showErrorBanner("Photorealistic 3D tiles failed to load — Cesium ion's free-tier quota may be exhausted for this month, or the ion token isn't configured.");
+                checkbox.checked = false;
+            }
         } else {
             if (photorealisticOverlay) photorealisticOverlay.setProps({ layers: [] });
             map.easeTo({ pitch: 0, duration: 1000 });

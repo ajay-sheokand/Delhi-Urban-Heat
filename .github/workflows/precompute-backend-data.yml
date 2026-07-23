@@ -43,6 +43,9 @@ jobs:
           if [ -z "$OPENWEATHER_API_KEY" ]; then
             echo "Warning: OPENWEATHER_API_KEY not set — weather.json will not be refreshed this run."
           fi
+          if [ -z "${{ secrets.CESIUM_ION_TOKEN }}" ]; then
+            echo "Warning: CESIUM_ION_TOKEN not set — the Photorealistic 3D map toggle will fail to load."
+          fi
 
       - name: Install dependencies
         run: |
@@ -84,6 +87,12 @@ jobs:
           cp muenster_wards.geojson public/
           cp muenster_elderly_population.geojson public/
           cp -r backend-data/* public/
+
+      - name: Inject Cesium ion token
+        env:
+          CESIUM_ION_TOKEN: ${{ secrets.CESIUM_ION_TOKEN }}
+        run: |
+          sed -i "s|__CESIUM_ION_TOKEN__|${CESIUM_ION_TOKEN}|" public/app.js
 
       - name: Publish to gh-pages
         uses: peaceiris/actions-gh-pages@v4
