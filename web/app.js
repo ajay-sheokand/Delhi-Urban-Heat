@@ -250,6 +250,18 @@ function buildBoundaryOverlayLayers() {
 // raster layers (addRasterLayer) - reused here as deck.gl TileLayers, each wrapping
 // BitmapLayer sublayers, with depthCompare: "always" so they draw over the opaque
 // photorealistic mesh instead of being hidden under it like the native MapLibre layers are.
+// TileLayer's default tile-data path decodes fetched tiles via a loaders.gl ImageLoader,
+// which this page never loads (only deck.gl core + @loaders.gl/3d-tiles are on the page,
+// and deck.gl's own UMD bundle doesn't bundle @loaders.gl/images) - with no loader to decode
+// the fetched PNG bytes, BitmapLayer.image never gets a real image and nothing draws.
+// getTileData below bypasses that entirely with the browser's native createImageBitmap.
+async function fetchTileImage({ url, signal }) {
+    const res = await fetch(url, { signal });
+    if (!res.ok) throw new Error(`Tile fetch failed: ${res.status}`);
+    const blob = await res.blob();
+    return await createImageBitmap(blob);
+}
+
 function buildRasterOverlayLayers() {
     const specs = [
         { key: "lst", checkboxId: "toggle-lst" },
@@ -271,6 +283,7 @@ function buildRasterOverlayLayers() {
                 opacity: cached.opacity,
                 visible: checkbox.checked,
                 parameters: { depthCompare: "always" },
+                getTileData: fetchTileImage,
                 renderSubLayers: (props) => {
                     const { bbox } = props.tile;
                     return new deck.BitmapLayer(props, {
