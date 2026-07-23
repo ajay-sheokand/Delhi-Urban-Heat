@@ -312,6 +312,13 @@ function syncBoundaryOverlayLayers() {
 // from Google rather than hosting them). Workaround: resolve the real tile.googleapis.com URL
 // ourselves via the ion endpoint API, then hand that directly to Tile3DLayer with the plain
 // Tiles3DLoader — no ion-specific loader needed once we already have a real URL.
+// Translucent rather than a fully solid surface, so the flat map (base tiles, and any
+// LST/NDVI/land-cover layer not toggled on) still shows through the mesh itself, not just
+// through the depth-disabled data/boundary overlays drawn on top of it (buildRasterOverlayLayers,
+// buildBoundaryOverlayLayers). `parameters.blend` is forced on since deck.gl composites 3D-tile
+// content largely opaque by default and a plain `opacity` prop alone isn't reliably respected.
+const PHOTOREALISTIC_3D_OPACITY = 0.6;
+
 async function buildPhotorealisticLayer() {
     const res = await fetch(
         `https://api.cesium.com/v1/assets/${GOOGLE_PHOTOREALISTIC_3D_TILES_ASSET_ID}/endpoint?access_token=${CESIUM_ION_TOKEN}`
@@ -322,6 +329,8 @@ async function buildPhotorealisticLayer() {
         id: "google-photorealistic-3d-tiles",
         data: endpoint.options.url,
         loaders: [loaders.Tiles3DLoader],
+        opacity: PHOTOREALISTIC_3D_OPACITY,
+        parameters: { blend: true },
     });
 }
 
