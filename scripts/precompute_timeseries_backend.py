@@ -665,10 +665,9 @@ def build_ward_vulnerability_dataset(
         .getInfo()
         .get("features", [])
     )
-    print(f"DEBUG ward population: {len(pop_rows)} raw features returned")
-    if pop_rows:
-        print(f"DEBUG ward population sample properties: {pop_rows[0].get('properties')}")
-    pop_by_ward = {f["properties"].get("ward_no"): f["properties"].get("population") for f in pop_rows}
+    # ee.Reducer.sum()'s output property is named "sum", not the band name -
+    # unlike mean() (used above), which keeps the band name ("LST"/"NDVI").
+    pop_by_ward = {f["properties"].get("ward_no"): f["properties"].get("sum") for f in pop_rows}
 
     wards = []
     for feat in lst_ndvi_rows:
