@@ -73,11 +73,14 @@ def init_ee() -> None:
 
 
 def mask_landsat_l2(image: ee.Image) -> ee.Image:
+    # QA_PIXEL bit positions per the official Landsat 8-9 Collection 2 Level-2
+    # Science Product Guide (LSDS-1619): bit 2 = Cirrus, bit 3 = Cloud,
+    # bit 4 = Cloud Shadow, bit 5 = Snow. (Water is bit 7, not used here.)
     qa = image.select("QA_PIXEL")
-    cloud_shadow_bit = 1 << 3
-    snow_bit = 1 << 4
-    cloud_bit = 1 << 5
-    cirrus_bit = 1 << 7
+    cirrus_bit = 1 << 2
+    cloud_bit = 1 << 3
+    cloud_shadow_bit = 1 << 4
+    snow_bit = 1 << 5
     mask = (
         qa.bitwiseAnd(cloud_shadow_bit).eq(0)
         .And(qa.bitwiseAnd(snow_bit).eq(0))
