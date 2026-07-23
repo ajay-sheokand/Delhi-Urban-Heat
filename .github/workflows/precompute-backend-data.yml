@@ -53,7 +53,7 @@ jobs:
         run: |
           mkdir -p backend-data
           git fetch origin gh-pages --depth=1 2>/dev/null || true
-          for f in timeseries_scenes.json map_layers.json district_analytics.json weather.json historical_trends.json; do
+          for f in timeseries_scenes.json map_layers.json district_analytics.json weather.json historical_trends.json ward_vulnerability.json; do
             if git show origin/gh-pages:"$f" > "backend-data/$f.tmp" 2>/dev/null; then
               mv "backend-data/$f.tmp" "backend-data/$f"
             else
@@ -76,6 +76,7 @@ jobs:
           mkdir -p public
           cp -r web/* public/
           cp delhi_admin.geojson public/
+          cp delhi_wards.geojson public/
           cp -r backend-data/* public/
 
       - name: Publish to gh-pages

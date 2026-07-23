@@ -77,6 +77,33 @@
             </div>
         </div>
 
+        <h2 class="section-title">Heat Vulnerability by Ward</h2>
+        <p class="muted">
+            Delhi's 11 districts are too large to show who is actually most exposed — each covers millions of people.
+            This section re-runs the LST, NDVI and population inputs at ward resolution (290 wards, pre-2022 delimitation)
+            to rank the areas where high surface heat, low vegetation and high population density overlap.
+            <strong>Vulnerability score</strong> = the average of min-max normalized LST, inverse-normalized NDVI, and
+            normalized population density per ward (0–100, higher = more vulnerable). Air temperature is intentionally
+            <em>not</em> part of this score and stays district-level only (see the caveat above) — NASA POWER's ~50km
+            grid and city-scale weather stations don't carry real information at ward scale, so adding them here would
+            be false precision, not more signal. See the map's "Ward Boundaries" layer to click into any individual ward.
+        </p>
+        <div id="ward-vulnerability-meta" class="muted"></div>
+        <div class="chart-grid">
+            <div class="chart-card" style="grid-column: 1 / -1;">
+                <h3>Top 20 Most Vulnerable Wards</h3>
+                <canvas id="ward-vulnerability-chart"></canvas>
+            </div>
+        </div>
+        <div class="data-table-wrap">
+            <table class="data-table" id="ward-vulnerability-table">
+                <thead>
+                    <tr><th>Ward</th><th>LST (°C)</th><th>NDVI</th><th>Population Density (/km²)</th><th>Vulnerability Score</th></tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
         <h2 class="section-title">Land Cover Statistics</h2>
         <div class="data-table-wrap">
             <table class="data-table" id="landcover-table">

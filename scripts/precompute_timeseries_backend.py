@@ -169,6 +169,40 @@ def load_district_features(workspace: str) -> list:
     return districts
 
 
+def load_ward_features(workspace: str) -> ee.FeatureCollection:
+    """Single batched FeatureCollection of Delhi's 290 wards (pre-2022
+    delimitation — see README for provenance/license), keyed by the file's
+    unique Ward_No property. Built as one FeatureCollection rather than a
+    Python list of per-ward ee.Geometry (contrast load_district_features)
+    so build_ward_vulnerability_dataset can run zonal stats via reduceRegions
+    in a couple of batched server-side calls instead of ~290 sequential ones.
+    delhi_wards.geojson was verified clean (no Z-coordinates, all valid
+    polygons) at import time, so unlike load_district_features there is no
+    per-feature forced-validation round trip here — that would defeat the
+    point of batching.
+    """
+    geojson_path = os.path.join(workspace, "delhi_wards.geojson")
+    gdf = gpd.read_file(geojson_path)
+
+    features = []
+    for _, row in gdf.iterrows():
+        try:
+            geom = shapely_geom_to_ee(repair_shapely_geometry(row.geometry))
+        except Exception as exc:
+            print(f"Ward polygon invalid for {row.get('Ward_Name')}, skipping: {exc}")
+            continue
+        features.append(
+            ee.Feature(
+                geom,
+                {
+                    "ward_name": str(row.get("Ward_Name") or "Unknown").title(),
+                    "ward_no": str(row.get("Ward_No") or ""),
+                },
+            )
+        )
+    return ee.FeatureCollection(features)
+
+
 # Same 11 district centroids used by the weather markers (names match
 # load_district_features()'s .title()-cased "District" property exactly).
 DISTRICT_LOCATIONS = [
@@ -578,6 +612,130 @@ def build_district_analytics_dataset(
     }
 
 
+def _minmax_normalizer(values: list, invert: bool = False):
+    """Returns a fn mapping a raw value to its 0-1 min-max position across
+    `values` (None-safe). `invert=True` flips the scale, for inputs where a
+    lower raw value means more vulnerable (e.g. NDVI)."""
+    clean = [v for v in values if v is not None]
+    if len(clean) < 2 or max(clean) == min(clean):
+        return lambda v: None
+    lo, hi = min(clean), max(clean)
+    span = hi - lo
+
+    def norm(v):
+        if v is None:
+            return None
+        n = (v - lo) / span
+        return 1 - n if invert else n
+
+    return norm
+
+
+def build_ward_vulnerability_dataset(
+    region: ee.Geometry,
+    ward_fc: ee.FeatureCollection,
+    lst_image: ee.Image,
+    ndvi_image: ee.Image,
+) -> dict:
+    """Ward-resolution LST/NDVI/population — the inputs that are genuinely
+    fine-grained at the satellite/gridded-population level. Air temperature
+    deliberately stays district-level only (build_district_analytics_dataset):
+    NASA POWER's ~50km grid and OpenWeather's station data don't carry real
+    per-ward signal across a city Delhi's size, so computing them per-ward
+    would be false precision, not more information.
+    """
+    ward_fc = ward_fc.map(lambda f: f.set("area_km2", f.geometry().area(1).divide(1e6)))
+
+    combined = lst_image.addBands(ndvi_image)
+    lst_ndvi_rows = combined.reduceRegions(
+        collection=ward_fc, reducer=ee.Reducer.mean(), scale=100, tileScale=4
+    ).getInfo().get("features", [])
+
+    worldpop = (
+        ee.ImageCollection("WorldPop/GP/100m/pop")
+        .filter(ee.Filter.eq("country", "IND"))
+        .sort("year", False)
+        .first()
+    )
+    population_year = int(worldpop.get("year").getInfo())
+    pop_rows = (
+        worldpop.select("population")
+        .reduceRegions(collection=ward_fc, reducer=ee.Reducer.sum(), scale=100, tileScale=4)
+        .getInfo()
+        .get("features", [])
+    )
+    pop_by_ward = {f["properties"].get("ward_no"): f["properties"].get("population") for f in pop_rows}
+
+    wards = []
+    for feat in lst_ndvi_rows:
+        props = feat.get("properties", {})
+        ward_no = props.get("ward_no")
+        area_km2 = props.get("area_km2")
+        population = pop_by_ward.get(ward_no)
+        population_density_km2 = (
+            population / area_km2 if population is not None and area_km2 else None
+        )
+        wards.append(
+            {
+                "ward_name": props.get("ward_name"),
+                "ward_no": ward_no,
+                "mean_lst_c": props.get("LST"),
+                "mean_ndvi": props.get("NDVI"),
+                "area_km2": area_km2,
+                "population": population,
+                "population_density_km2": population_density_km2,
+            }
+        )
+
+    lst_norm = _minmax_normalizer([w["mean_lst_c"] for w in wards])
+    ndvi_norm = _minmax_normalizer([w["mean_ndvi"] for w in wards], invert=True)
+    density_norm = _minmax_normalizer([w["population_density_km2"] for w in wards])
+
+    for w in wards:
+        components = [
+            lst_norm(w["mean_lst_c"]),
+            ndvi_norm(w["mean_ndvi"]),
+            density_norm(w["population_density_km2"]),
+        ]
+        valid = [c for c in components if c is not None]
+        w["vulnerability_score"] = round(sum(valid) / len(valid) * 100, 1) if valid else None
+
+    ranked = sorted(
+        (w for w in wards if w["vulnerability_score"] is not None),
+        key=lambda w: w["vulnerability_score"],
+        reverse=True,
+    )
+
+    return {
+        "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "population_year": population_year,
+        "source_note": (
+            "Ward boundaries: datameet/Municipal_Spatial_Data (CC-BY-SA 2.5 India), "
+            "pre-2022 delimitation (erstwhile North/South/East Delhi Municipal "
+            "Corporations + NDMC + Delhi Cantonment). Population: WorldPop 100m "
+            "(CC-BY 4.0). Vulnerability score = average of min-max normalized LST, "
+            "inverse-normalized NDVI, and normalized population density (0-100, "
+            "higher = more vulnerable). Air temperature is not part of this score "
+            "and remains district-level only — see district_analytics.json."
+        ),
+        "wards": wards,
+        "ranking": [
+            {
+                k: w[k]
+                for k in (
+                    "ward_name",
+                    "ward_no",
+                    "mean_lst_c",
+                    "mean_ndvi",
+                    "population_density_km2",
+                    "vulnerability_score",
+                )
+            }
+            for w in ranked[:20]
+        ],
+    }
+
+
 def should_run_weekly_job() -> bool:
     """True on the first 6-hourly cron run of the week (Monday 00:xx UTC), or
     whenever manually forced via the workflow_dispatch input (e.g. to backfill
@@ -748,6 +906,15 @@ def main() -> None:
         print(f"Wrote district_analytics.json for {len(analytics_output['districts'])} districts")
     except Exception as exc:
         print(f"District analytics precompute failed, leaving previous district_analytics.json in place if any: {exc}")
+
+    try:
+        ward_fc = load_ward_features(workspace)
+        ward_output = build_ward_vulnerability_dataset(region, ward_fc, lst_image, ndvi_image)
+        with open(os.path.join(out_dir, "ward_vulnerability.json"), "w", encoding="utf-8") as f:
+            json.dump(ward_output, f, ensure_ascii=True)
+        print(f"Wrote ward_vulnerability.json for {len(ward_output['wards'])} wards")
+    except Exception as exc:
+        print(f"Ward vulnerability precompute failed, leaving previous ward_vulnerability.json in place if any: {exc}")
 
     if should_run_weekly_job():
         try:

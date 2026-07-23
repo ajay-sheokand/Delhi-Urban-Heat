@@ -59,6 +59,54 @@ async function main() {
     renderLandCoverCharts(analytics, landCoverColors);
     renderTables(analytics);
     loadLongTermTrends(landCoverColors);
+    loadWardVulnerability();
+}
+
+async function loadWardVulnerability() {
+    let data;
+    try {
+        const res = await fetch("ward_vulnerability.json", { cache: "no-store" });
+        data = await res.json();
+    } catch (err) {
+        console.error("Failed to load ward_vulnerability.json", err);
+        showErrorBanner("Ward vulnerability data unavailable — try reloading.");
+        return;
+    }
+
+    const ranking = data.ranking || [];
+    document.getElementById("ward-vulnerability-meta").textContent = ranking.length
+        ? `${(data.wards || []).length} wards scored · population year ${data.population_year || "unknown"} · updated ${data.generated_at_utc || "unknown"}`
+        : "";
+
+    new Chart(document.getElementById("ward-vulnerability-chart"), {
+        type: "bar",
+        data: {
+            labels: ranking.map((w) => w.ward_name),
+            datasets: [
+                {
+                    label: "Vulnerability score",
+                    data: ranking.map((w) => w.vulnerability_score),
+                    backgroundColor: "#d62728",
+                },
+            ],
+        },
+        options: {
+            indexAxis: "y",
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: { x: { min: 0, max: 100, title: { display: true, text: "Vulnerability score (0-100)" } } },
+        },
+    });
+
+    const body = document.querySelector("#ward-vulnerability-table tbody");
+    body.innerHTML = ranking
+        .map(
+            (w) =>
+                `<tr><td>${w.ward_name}</td><td>${fmt(w.mean_lst_c)}</td><td>${fmt(w.mean_ndvi, 3)}</td><td>${
+                    w.population_density_km2 != null ? Math.round(w.population_density_km2).toLocaleString() : "N/A"
+                }</td><td>${fmt(w.vulnerability_score, 1)}</td></tr>`
+        )
+        .join("");
 }
 
 async function loadLongTermTrends(landCoverColors) {

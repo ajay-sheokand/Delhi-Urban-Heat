@@ -35,7 +35,7 @@ map.on("load", async () => {
     setupTabs();
     document.getElementById("data-updated").textContent = "Loading map data…";
     document.getElementById("heat-alerts-list").textContent = "Loading weather…";
-    await Promise.all([loadMapLayers(), loadDistrictBoundaries(), loadTimeSeries()]);
+    await Promise.all([loadMapLayers(), loadDistrictBoundaries(), loadWardBoundaries(), loadTimeSeries()]);
     loadWeather();
 });
 
@@ -195,6 +195,71 @@ async function loadDistrictBoundaries() {
                Air Temp: ${fmtC(stats.air_temp_c)}<br/>
                Air UHI: ${fmtC(stats.uhi_air_c, true)} · Surface UHI: ${fmtC(stats.uhi_surface_c, true)}`
             : `<strong>${name}</strong><br/>District analytics unavailable.`;
+
+        new maplibregl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+}
+
+async function loadWardBoundaries() {
+    let geojson;
+    try {
+        const res = await fetch("delhi_wards.geojson", { cache: "no-store" });
+        geojson = await res.json();
+    } catch (err) {
+        console.error("Failed to load delhi_wards.geojson", err);
+        showErrorBanner("Ward boundaries unavailable — try reloading.");
+        return;
+    }
+
+    map.addSource("wards", { type: "geojson", data: geojson });
+    map.addLayer({
+        id: "ward-fill",
+        type: "fill",
+        source: "wards",
+        paint: { "fill-color": "#000000", "fill-opacity": 0 },
+        layout: { visibility: "none" },
+    });
+    map.addLayer({
+        id: "ward-lines",
+        type: "line",
+        source: "wards",
+        paint: { "line-color": "#6a3fb5", "line-width": 0.75, "line-opacity": 0.6 },
+        layout: { visibility: "none" },
+    });
+
+    document.getElementById("toggle-wards").addEventListener("change", (e) => {
+        const visibility = e.target.checked ? "visible" : "none";
+        map.setLayoutProperty("ward-lines", "visibility", visibility);
+        map.setLayoutProperty("ward-fill", "visibility", visibility);
+    });
+
+    map.on("mouseenter", "ward-fill", () => (map.getCanvas().style.cursor = "pointer"));
+    map.on("mouseleave", "ward-fill", () => (map.getCanvas().style.cursor = ""));
+
+    let wardStats = [];
+    try {
+        const res = await fetch("ward_vulnerability.json", { cache: "no-store" });
+        const data = await res.json();
+        wardStats = data.wards || [];
+    } catch (err) {
+        console.error("Failed to load ward_vulnerability.json", err);
+    }
+
+    map.on("click", "ward-fill", (e) => {
+        const props = e.features[0].properties;
+        const wardNo = props.Ward_No;
+        const name = props.Ward_Name || "Unknown";
+        const stats = wardStats.find((w) => w.ward_no === wardNo);
+
+        const html = stats
+            ? `<strong>${name}</strong><br/>
+               LST: ${fmtC(stats.mean_lst_c)} · NDVI: ${fmtNum(stats.mean_ndvi, 3)}<br/>
+               Population density: ${
+                   stats.population_density_km2 != null ? Math.round(stats.population_density_km2).toLocaleString() : "N/A"
+               }/km²<br/>
+               Vulnerability score: ${fmtNum(stats.vulnerability_score, 1)} / 100<br/>
+               <span class="muted">Air temperature is district-level only — see the boundary below.</span>`
+            : `<strong>${name}</strong><br/>Ward analytics unavailable.`;
 
         new maplibregl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
