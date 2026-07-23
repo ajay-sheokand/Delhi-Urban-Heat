@@ -282,12 +282,19 @@ def pearson_correlation(xs: list, ys: list):
 
 
 def heat_alert_imd(temp_c: float, feels_like_c: float = None) -> dict:
-    """Simplified proxy for IMD's Heat Wave criteria, based on current
-    temperature (see README for how this differs from IMD's official,
-    departure-from-normal-based definition)."""
-    if temp_c >= 40:
+    """Simplified proxy for IMD's Heat Wave criteria. Uses OpenWeather's
+    feels_like (humidity/wind-adjusted) value as the basis when available,
+    falling back to raw temperature — IMD's own criteria is neither of
+    these (it's a departure-from-normal test on station daily maximum, see
+    README), but feels_like is a better proxy for physiologically-relevant
+    heat stress than a dry-bulb reading, which is the same reasoning
+    heat_alert_dwd already uses for Münster. Particularly relevant for
+    Delhi's humid pre-monsoon/monsoon heat, where raw temperature
+    understates perceived heat stress."""
+    basis = feels_like_c if feels_like_c is not None else temp_c
+    if basis >= 40:
         return {"level": "extreme", "label": "🔥 Extreme Heat Alert"}
-    if temp_c >= 35:
+    if basis >= 35:
         return {"level": "high", "label": "⚠️ High Heat Warning"}
     return {"level": "normal", "label": "🌤️ Normal Temperature"}
 
