@@ -161,17 +161,82 @@ function wireBuildingsToggle() {
 }
 
 let photorealisticOverlay = null;
+let photorealisticActive = false;
+let currentPhotorealisticLayer = null;
+let districtGeojsonCache = null;
+let wardGeojsonCache = null;
+let complementaryGeojsonCache = null;
+
+function hexToRgb(hex, alpha) {
+    const n = parseInt(hex.replace("#", ""), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255, alpha];
+}
 
 // Draping 2D data onto the photorealistic mesh's real geometry (deck.gl's TerrainExtension)
-// is a confirmed, unresolved upstream bug in interleaved mode (visgl/deck.gl#7893) as of this
-// writing - so this is a lighter compromise: just reorder the flat boundary line/fill layers
-// to draw after (on top of) the mesh. Expect some z-fighting/flicker where 3D buildings poke
-// through the flat lines, since this is stack-order reordering, not true surface draping.
-function bringBoundaryLayersToFront() {
-    const boundaryLayerIds = ["district-fill", "district-lines", "ward-fill", "ward-lines", "complementary-fill", "complementary-lines"];
-    for (const id of boundaryLayerIds) {
-        if (map.getLayer(id)) map.moveLayer(id);
+// is a confirmed, unresolved upstream bug in interleaved mode (visgl/deck.gl#7893). A simpler
+// fix — just reordering the flat MapLibre boundary layers to draw after the mesh — does NOT
+// work either: once the interleaved 3D layer writes real depth values, MapLibre's own 2D
+// layers get depth-tested against it regardless of paint order, so they stay fully hidden
+// (verified directly, not assumed). What does work: render the boundaries as deck.gl
+// GeoJsonLayers in the same interleaved overlay with { depthCompare: "always" } (deck.gl
+// 9.1+ renamed the old depthTest:false parameter to align with WebGPU), which bypasses
+// depth comparison entirely instead of relying on draw order.
+function buildBoundaryOverlayLayers() {
+    const layers = [];
+    if (districtGeojsonCache) {
+        layers.push(
+            new deck.GeoJsonLayer({
+                id: "photoreal-district-lines",
+                data: districtGeojsonCache,
+                filled: false,
+                stroked: true,
+                getLineColor: hexToRgb("#2c3e50", 230),
+                lineWidthMinPixels: 1.5,
+                visible: document.getElementById("toggle-districts").checked,
+                parameters: { depthCompare: "always" },
+            })
+        );
     }
+    if (wardGeojsonCache) {
+        layers.push(
+            new deck.GeoJsonLayer({
+                id: "photoreal-ward-lines",
+                data: wardGeojsonCache,
+                filled: false,
+                stroked: true,
+                getLineColor: hexToRgb("#6a3fb5", 180),
+                lineWidthMinPixels: 1,
+                visible: document.getElementById("toggle-wards").checked,
+                parameters: { depthCompare: "always" },
+            })
+        );
+    }
+    if (complementaryGeojsonCache) {
+        const isPoints = complementaryGeojsonCache.features[0]?.geometry?.type === "Point";
+        layers.push(
+            new deck.GeoJsonLayer({
+                id: "photoreal-complementary",
+                data: complementaryGeojsonCache,
+                filled: true,
+                stroked: !isPoints,
+                pointType: "circle",
+                getFillColor: hexToRgb(CITY.complementaryFillColor, isPoints ? 180 : 115),
+                getLineColor: hexToRgb(CITY.complementaryLineColor, 200),
+                getPointRadius: 4,
+                pointRadiusUnits: "pixels",
+                lineWidthMinPixels: 1,
+                visible: document.getElementById("toggle-jj-clusters").checked,
+                parameters: { depthCompare: "always" },
+            })
+        );
+    }
+    return layers;
+}
+
+function syncBoundaryOverlayLayers() {
+    if (!photorealisticActive || !photorealisticOverlay) return;
+    const layers = currentPhotorealisticLayer ? [currentPhotorealisticLayer, ...buildBoundaryOverlayLayers()] : [];
+    photorealisticOverlay.setProps({ layers });
 }
 
 // CesiumIonLoader has a known bug (community-reported) where it only handles Cesium-hosted
@@ -202,16 +267,20 @@ function wirePhotorealisticToggle() {
                 map.addControl(photorealisticOverlay);
             }
             try {
-                const layer = await buildPhotorealisticLayer();
-                photorealisticOverlay.setProps({ layers: [layer] });
-                bringBoundaryLayersToFront();
+                currentPhotorealisticLayer = await buildPhotorealisticLayer();
+                photorealisticActive = true;
+                syncBoundaryOverlayLayers();
                 map.easeTo({ pitch: 60, zoom: Math.max(map.getZoom(), 16), duration: 1000 });
             } catch (err) {
                 console.error("Failed to load photorealistic 3D tiles", err);
                 showErrorBanner("Photorealistic 3D tiles failed to load — Cesium ion's free-tier quota may be exhausted for this month, or the ion token isn't configured.");
+                photorealisticActive = false;
+                currentPhotorealisticLayer = null;
                 checkbox.checked = false;
             }
         } else {
+            photorealisticActive = false;
+            currentPhotorealisticLayer = null;
             if (photorealisticOverlay) photorealisticOverlay.setProps({ layers: [] });
             map.easeTo({ pitch: 0, duration: 1000 });
         }
@@ -274,6 +343,7 @@ async function loadDistrictBoundaries() {
         showErrorBanner(`${CITY.districtLabel} boundaries unavailable — try reloading.`);
         return;
     }
+    districtGeojsonCache = geojson;
 
     map.addSource("districts", { type: "geojson", data: geojson });
     map.addLayer({
@@ -293,6 +363,7 @@ async function loadDistrictBoundaries() {
         const visibility = e.target.checked ? "visible" : "none";
         map.setLayoutProperty("district-lines", "visibility", visibility);
         map.setLayoutProperty("district-fill", "visibility", visibility);
+        syncBoundaryOverlayLayers();
     });
 
     map.on("mouseenter", "district-fill", () => (map.getCanvas().style.cursor = "pointer"));
@@ -334,6 +405,7 @@ async function loadWardBoundaries() {
         showErrorBanner(`${CITY.wardLabel} boundaries unavailable — try reloading.`);
         return;
     }
+    wardGeojsonCache = geojson;
 
     map.addSource("wards", { type: "geojson", data: geojson });
     map.addLayer({
@@ -355,6 +427,7 @@ async function loadWardBoundaries() {
         const visibility = e.target.checked ? "visible" : "none";
         map.setLayoutProperty("ward-lines", "visibility", visibility);
         map.setLayoutProperty("ward-fill", "visibility", visibility);
+        syncBoundaryOverlayLayers();
     });
 
     map.on("mouseenter", "ward-fill", () => (map.getCanvas().style.cursor = "pointer"));
@@ -417,6 +490,7 @@ async function loadComplementaryLayer() {
         showErrorBanner(`${CITY.complementaryLabel} data unavailable — try reloading.`);
         return;
     }
+    complementaryGeojsonCache = geojson;
 
     // MapLibre fill/line layers only render (and hit-test) Polygon geometry;
     // Münster's elderly-population layer is Points, so it needs a circle
@@ -457,6 +531,7 @@ async function loadComplementaryLayer() {
         if (map.getLayer("complementary-lines")) {
             map.setLayoutProperty("complementary-lines", "visibility", visibility);
         }
+        syncBoundaryOverlayLayers();
     });
 
     map.on("mouseenter", "complementary-fill", () => (map.getCanvas().style.cursor = "pointer"));
