@@ -23,28 +23,16 @@ body {
     cursor: pointer;
 }
 
-/* Interpolated wind-field arrow: rotated to point in the direction the wind blows TOWARD
-   (--wind-rot, set inline per marker), pulsing faster for stronger interpolated wind speed
-   (--wind-duration, also set inline). Not a real per-point reading - see the layer's own
-   toggle label and legend note. */
-.wind-arrow {
-    width: 0;
-    height: 0;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-bottom: 13px solid rgba(23, 98, 196, 0.8);
-    filter: drop-shadow(0 0 1px rgba(255, 255, 255, 0.9));
+/* Wind-field particle-flow canvas (app.js: startWindFieldAnimation). A plain canvas
+   overlaid on the map, redrawn every frame - not a MapLibre/deck.gl layer, since the
+   trailing-streak effect needs direct per-pixel control (fade the previous frame instead
+   of clearing it) that those layer APIs don't expose. */
+#wind-field-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
     pointer-events: none;
-    transform-origin: 50% 65%;
-    animation-name: wind-pulse;
-    animation-duration: var(--wind-duration, 1.2s);
-    animation-timing-function: ease-in-out;
-    animation-iteration-count: infinite;
-}
-
-@keyframes wind-pulse {
-    0%, 100% { transform: rotate(var(--wind-rot, 0deg)) scale(0.8); opacity: 0.4; }
-    50% { transform: rotate(var(--wind-rot, 0deg)) scale(1.25); opacity: 1; }
+    z-index: 1;
 }
 
 .panel {

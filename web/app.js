@@ -770,43 +770,205 @@ async function loadWeather() {
         .join("");
 }
 
-// Grid interpolated server-side (inverse-distance weighting) from the same ~9-11 real district
-// wind readings above (build_wind_field() in the precompute script) - illustrative of general
-// flow across the city, not real per-point measurements. Each arrow points in the direction the
-// wind blows TOWARD (opposite of wind_deg's meteorological "from" convention, since "where is it
-// going" reads more naturally for a flow visualization), and pulses faster for stronger wind.
-function windArrowDuration(speedMs) {
-    const kmh = speedMs * 3.6;
-    return Math.max(0.35, 1.8 - kmh * 0.05).toFixed(2) + "s";
+// Animated wind-field particle flow (canvas), in the style of windy.com/earth.nullschool:
+// many small particles are advected through the interpolated (u, v) vector field built
+// server-side from the ~9-11 real district readings (build_wind_field() in the precompute
+// script), each leaving a fading trail. This reuses the exact same interpolated grid the
+// earlier discrete-arrow version used - only the rendering technique changed, not the
+// underlying data or its "illustrative, not measured" honesty caveat (see the README's Wind
+// Field section). A single rotating/pulsing arrow per grid cell read as flicker, not flow;
+// a particle trace genuinely shows motion because it draws where each particle *has been*,
+// not just its current instantaneous state.
+
+// Rebuilds the flat 64-cell list into a lookup-able grid of (u, v) vectors, in the exact
+// row-major order build_wind_field() emits them (i = latitude step outer loop, j = longitude
+// step inner loop) - safe to rely on since this file and the precompute script are written
+// and maintained together, not an independent consumer of a public API.
+function buildVectorGrid(windField) {
+    const cells = windField?.cells || [];
+    const gridSize = windField?.grid_size || 0;
+    if (gridSize < 2 || cells.length !== gridSize * gridSize) return null;
+
+    const latMin = cells[0].lat;
+    const latMax = cells[(gridSize - 1) * gridSize].lat;
+    const lonMin = cells[0].lon;
+    const lonMax = cells[gridSize - 1].lon;
+
+    const u = new Float32Array(cells.length);
+    const v = new Float32Array(cells.length);
+    const speed = new Float32Array(cells.length);
+    cells.forEach((c, idx) => {
+        const towardRad = ((c.wind_deg + 180) % 360) * (Math.PI / 180);
+        u[idx] = c.wind_speed_ms * Math.sin(towardRad);
+        v[idx] = c.wind_speed_ms * Math.cos(towardRad);
+        speed[idx] = c.wind_speed_ms;
+    });
+
+    return { gridSize, latMin, latMax, lonMin, lonMax, u, v, speed };
+}
+
+// Bilinear interpolation between the 4 grid nodes surrounding (lon, lat) - the same
+// technique the grid itself was built with server-side (inverse-distance weighting), just
+// one interpolation step closer to the particle's exact position instead of only the 64
+// discrete node points. Returns null outside the grid's extent (particle should respawn).
+function sampleVectorGrid(grid, lon, lat) {
+    const { gridSize, latMin, latMax, lonMin, lonMax, u, v, speed } = grid;
+    const fi = ((lat - latMin) / (latMax - latMin)) * (gridSize - 1);
+    const fj = ((lon - lonMin) / (lonMax - lonMin)) * (gridSize - 1);
+    if (!Number.isFinite(fi) || !Number.isFinite(fj) || fi < 0 || fi > gridSize - 1 || fj < 0 || fj > gridSize - 1) {
+        return null;
+    }
+    const i0 = Math.floor(fi);
+    const j0 = Math.floor(fj);
+    const i1 = Math.min(i0 + 1, gridSize - 1);
+    const j1 = Math.min(j0 + 1, gridSize - 1);
+    const ti = fi - i0;
+    const tj = fj - j0;
+    const idx = (i, j) => i * gridSize + j;
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const bilerp = (arr) => lerp(lerp(arr[idx(i0, j0)], arr[idx(i0, j1)], tj), lerp(arr[idx(i1, j0)], arr[idx(i1, j1)], tj), ti);
+    return { u: bilerp(u), v: bilerp(v), speed: bilerp(speed) };
+}
+
+// Stylized (not a measurement-grade scale) - dark teal at calm, through cyan, into magenta
+// at the top of Delhi's realistic wind range (~0-8 m/s), matching the windy.com-style
+// reference this feature was asked to look like.
+function windSpeedColor(speedMs) {
+    const stops = [
+        [8, 145, 130],
+        [56, 189, 205],
+        [168, 85, 220],
+        [225, 60, 170],
+    ];
+    const t = Math.max(0, Math.min(1, speedMs / 8)) * (stops.length - 1);
+    const i0 = Math.min(Math.floor(t), stops.length - 2);
+    const localT = t - i0;
+    const [r0, g0, b0] = stops[i0];
+    const [r1, g1, b1] = stops[i0 + 1];
+    const r = Math.round(r0 + (r1 - r0) * localT);
+    const g = Math.round(g0 + (g1 - g0) * localT);
+    const b = Math.round(b0 + (b1 - b0) * localT);
+    return `rgb(${r},${g},${b})`;
+}
+
+const METERS_PER_DEG_LAT = 111320;
+const WIND_PARTICLE_COUNT = 400;
+// Real wind speeds (a few m/s) are imperceptible as real-world-scale motion over a ~50km
+// city view in a few seconds - this scales displayed motion for legibility. Stylized, like
+// the rest of this visualization; not a physical simulation.
+const WIND_PARTICLE_SPEED_SCALE = 12000;
+const WIND_PARTICLE_MAX_AGE = 90;
+
+let windFieldAnimation = null;
+
+function startWindFieldAnimation(windField) {
+    const grid = buildVectorGrid(windField);
+    if (!grid) return;
+
+    const mapEl = document.getElementById("map");
+    const canvas = document.createElement("canvas");
+    canvas.id = "wind-field-canvas";
+    mapEl.appendChild(canvas);
+    const ctx = canvas.getContext("2d");
+
+    function randomParticle() {
+        return {
+            lon: grid.lonMin + Math.random() * (grid.lonMax - grid.lonMin),
+            lat: grid.latMin + Math.random() * (grid.latMax - grid.latMin),
+            age: Math.floor(Math.random() * WIND_PARTICLE_MAX_AGE),
+        };
+    }
+    let particles = Array.from({ length: WIND_PARTICLE_COUNT }, randomParticle);
+
+    function resizeCanvas() {
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = mapEl.clientWidth * dpr;
+        canvas.height = mapEl.clientHeight * dpr;
+        canvas.style.width = `${mapEl.clientWidth}px`;
+        canvas.style.height = `${mapEl.clientHeight}px`;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    resizeCanvas();
+    window.addEventListener("resize", resizeCanvas);
+
+    // Trails are drawn in screen space, so they'd smear incorrectly while the view itself
+    // is moving - simplest fix is to drop the trail history at the start of any pan/zoom and
+    // let it rebuild once the view settles, rather than trying to keep it correctly
+    // transformed mid-gesture.
+    function clearTrail() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    map.on("movestart", clearTrail);
+    map.on("zoomstart", clearTrail);
+
+    let lastTime = performance.now();
+    let rafId = null;
+
+    function frame(now) {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+
+        const w = canvas.clientWidth;
+        const h = canvas.clientHeight;
+        // Fades existing trail pixels toward transparent (multiplies their alpha) rather
+        // than clearing outright, which is what actually produces the trailing-streak look
+        // instead of single disconnected dashes.
+        ctx.globalCompositeOperation = "destination-in";
+        ctx.fillStyle = "rgba(0,0,0,0.90)";
+        ctx.fillRect(0, 0, w, h);
+        ctx.globalCompositeOperation = "source-over";
+        ctx.lineWidth = 1.4;
+        ctx.lineCap = "round";
+
+        particles.forEach((p) => {
+            const sample = sampleVectorGrid(grid, p.lon, p.lat);
+            if (!sample || p.age > WIND_PARTICLE_MAX_AGE) {
+                Object.assign(p, randomParticle(), { age: 0 });
+                return;
+            }
+            const prevScreen = map.project([p.lon, p.lat]);
+            const metersPerDegLon = METERS_PER_DEG_LAT * Math.cos((p.lat * Math.PI) / 180);
+            p.lon += (sample.u * dt * WIND_PARTICLE_SPEED_SCALE) / metersPerDegLon;
+            p.lat += (sample.v * dt * WIND_PARTICLE_SPEED_SCALE) / METERS_PER_DEG_LAT;
+            p.age += 1;
+            const newScreen = map.project([p.lon, p.lat]);
+
+            ctx.strokeStyle = windSpeedColor(sample.speed);
+            ctx.beginPath();
+            ctx.moveTo(prevScreen.x, prevScreen.y);
+            ctx.lineTo(newScreen.x, newScreen.y);
+            ctx.stroke();
+        });
+    }
+
+    function loop(now) {
+        frame(now);
+        rafId = requestAnimationFrame(loop);
+    }
+    rafId = requestAnimationFrame(loop);
+
+    windFieldAnimation = {
+        stop() {
+            cancelAnimationFrame(rafId);
+            window.removeEventListener("resize", resizeCanvas);
+            map.off("movestart", clearTrail);
+            map.off("zoomstart", clearTrail);
+            canvas.remove();
+            windFieldAnimation = null;
+        },
+    };
 }
 
 function wireWindFieldLayer(windField) {
     const checkbox = document.getElementById("toggle-wind-field");
     if (!checkbox) return;
-    const cells = windField?.cells || [];
-
-    const markers = cells.map((c) => {
-        const towardDeg = (c.wind_deg + 180) % 360;
-        // MapLibre positions a Marker by writing its own inline `transform: translate(...)`
-        // directly onto the element passed to `element:`. A CSS animation that also animates
-        // `transform` on that SAME element fully replaces it while running (animations don't
-        // compose with the underlying inline value) - so the rotate/pulse arrow can't be the
-        // positioned element itself, or its position collapses to (0,0) the moment the
-        // animation starts. Anchor (positioned by MapLibre, untouched by any animation) wraps
-        // arrow (animated, no positioning of its own).
-        const anchor = document.createElement("div");
-        const arrow = document.createElement("div");
-        arrow.className = "wind-arrow";
-        arrow.style.setProperty("--wind-rot", `${towardDeg}deg`);
-        arrow.style.setProperty("--wind-duration", windArrowDuration(c.wind_speed_ms));
-        anchor.appendChild(arrow);
-        anchor.title = `Interpolated: ${fmtWind(c.wind_speed_ms, c.wind_deg)}`;
-        return new maplibregl.Marker({ element: anchor }).setLngLat([c.lon, c.lat]);
-    });
-
-    if (checkbox.checked) markers.forEach((m) => m.addTo(map));
+    if (checkbox.checked) startWindFieldAnimation(windField);
     checkbox.addEventListener("change", (e) => {
-        markers.forEach((m) => (e.target.checked ? m.addTo(map) : m.remove()));
+        if (e.target.checked) {
+            startWindFieldAnimation(windField);
+        } else if (windFieldAnimation) {
+            windFieldAnimation.stop();
+        }
     });
 }
 
