@@ -852,7 +852,10 @@ function windSpeedColor(speedMs) {
 }
 
 const METERS_PER_DEG_LAT = 111320;
-const WIND_PARTICLE_COUNT = 400;
+// The grid now spans each city's real full extent (city["bbox_fallback"] server-side), not
+// just the area bounded by the district reading points - roughly double the previous
+// coverage for Delhi, so the particle count is scaled up to match trail density.
+const WIND_PARTICLE_COUNT = 700;
 // Real wind speeds (a few m/s) are imperceptible as real-world-scale motion over a ~50km
 // city view in a few seconds - this scales displayed motion for legibility. Stylized, like
 // the rest of this visualization; not a physical simulation.

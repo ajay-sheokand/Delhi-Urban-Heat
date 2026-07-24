@@ -966,13 +966,24 @@ def _vector_to_wind(u: float, v: float):
     return speed, from_deg
 
 
-def build_wind_field(districts: list, grid_size: int = 8) -> dict:
+def build_wind_field(districts: list, bbox: list = None, grid_size: int = 14) -> dict:
     """Inverse-distance-weighted interpolation of the real per-district wind readings onto a
     regular lat/lon grid, for an animated "wind field" visualization. Honesty note: this is
     interpolated from ~9-11 real point readings, not a measured grid - it fills in plausible
     values between known points, the same way the ward vulnerability score is explicit about
     being an exposure-only proxy rather than a validated index. Treat the field as illustrative
     of general flow, not as a real reading at any point that isn't one of the source districts.
+
+    `bbox` ([min_lon, min_lat, max_lon, max_lat], same convention as ee.Geometry.Rectangle -
+    see city["bbox_fallback"] in get_city_configs()) sets the grid's real spatial extent to the
+    whole city, not just the area spanned by the district reading points themselves - district
+    centroids avoid administrative edges by construction, so a grid confined to their bounding
+    box (the previous behavior, still the fallback below if bbox isn't passed) systematically
+    undercovers the city's actual periphery. Extending coverage this way doesn't add real
+    signal at the edges - those cells are now farther from every source point, so they're
+    increasingly extrapolated from whichever single district happens to be nearest rather than
+    genuinely interpolated between two or more - it only means the field visually covers where
+    it previously stopped short, consistent with the honesty note above either way.
     """
     pts = [
         (d["lat"], d["lon"], d["wind_speed_ms"], d["wind_deg"])
@@ -982,14 +993,17 @@ def build_wind_field(districts: list, grid_size: int = 8) -> dict:
     if len(pts) < 2:
         return {"grid_size": 0, "cells": [], "method": "idw_from_district_points"}
 
-    lats = [p[0] for p in pts]
-    lons = [p[1] for p in pts]
-    lat_min, lat_max = min(lats), max(lats)
-    lon_min, lon_max = min(lons), max(lons)
-    lat_pad = (lat_max - lat_min) * 0.15 or 0.05
-    lon_pad = (lon_max - lon_min) * 0.15 or 0.05
-    lat_min, lat_max = lat_min - lat_pad, lat_max + lat_pad
-    lon_min, lon_max = lon_min - lon_pad, lon_max + lon_pad
+    if bbox:
+        lon_min, lat_min, lon_max, lat_max = bbox
+    else:
+        lats = [p[0] for p in pts]
+        lons = [p[1] for p in pts]
+        lat_min, lat_max = min(lats), max(lats)
+        lon_min, lon_max = min(lons), max(lons)
+        lat_pad = (lat_max - lat_min) * 0.15 or 0.05
+        lon_pad = (lon_max - lon_min) * 0.15 or 0.05
+        lat_min, lat_max = lat_min - lat_pad, lat_max + lat_pad
+        lon_min, lon_max = lon_min - lon_pad, lon_max + lon_pad
 
     vectors = [(lat, lon, *_wind_to_vector(speed, deg)) for lat, lon, speed, deg in pts]
 
@@ -1066,7 +1080,7 @@ def build_weather_dataset(city: dict) -> dict:
     return {
         "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "districts": districts,
-        "wind_field": build_wind_field(districts),
+        "wind_field": build_wind_field(districts, bbox=city.get("bbox_fallback")),
     }
 
 
