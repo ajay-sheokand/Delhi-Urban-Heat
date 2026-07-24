@@ -964,6 +964,7 @@ def build_weather_dataset(city: dict) -> dict:
             temp_c = payload["main"]["temp"]
             feels_like_c = payload["main"]["feels_like"]
             alert = heat_alert_fn(temp_c, feels_like_c)
+            wind = payload.get("wind", {})
             districts.append(
                 {
                     "name": loc["name"],
@@ -972,6 +973,11 @@ def build_weather_dataset(city: dict) -> dict:
                     "temp_c": temp_c,
                     "feels_like_c": feels_like_c,
                     "humidity": payload["main"]["humidity"],
+                    # Same OpenWeather response already fetched for temp/humidity above -
+                    # wind.speed (m/s) and wind.deg (meteorological degrees, direction the
+                    # wind blows FROM) were already in the payload, just unused until now.
+                    "wind_speed_ms": wind.get("speed"),
+                    "wind_deg": wind.get("deg"),
                     "heat_alert_level": alert["level"],
                     "heat_alert_label": alert["label"],
                 }

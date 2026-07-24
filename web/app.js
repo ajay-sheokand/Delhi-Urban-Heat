@@ -700,6 +700,21 @@ function applyTimeSeriesDateFilter() {
     lstChart.update();
 }
 
+const COMPASS_DIRECTIONS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+
+function windCompass(deg) {
+    if (deg === null || deg === undefined || Number.isNaN(deg)) return null;
+    return COMPASS_DIRECTIONS[Math.round(deg / 22.5) % 16];
+}
+
+// wind_deg is meteorological convention - the direction the wind blows FROM, per OpenWeather's docs.
+function fmtWind(speedMs, deg) {
+    if (speedMs === null || speedMs === undefined || Number.isNaN(speedMs)) return "N/A";
+    const kmh = (speedMs * 3.6).toFixed(1);
+    const compass = windCompass(deg);
+    return compass ? `${kmh} km/h ${compass}` : `${kmh} km/h`;
+}
+
 async function loadWeather() {
     const alertsList = document.getElementById("heat-alerts-list");
 
@@ -726,7 +741,7 @@ async function loadWeather() {
     const markers = districts.map((d) => {
         const popupHtml = `<strong>${d.name}</strong><br/>${d.temp_c.toFixed(1)}°C (feels ${d.feels_like_c.toFixed(
             1
-        )}°C)<br/>Humidity: ${d.humidity}%<br/>${d.heat_alert_label}`;
+        )}°C)<br/>Humidity: ${d.humidity}%<br/>Wind: ${fmtWind(d.wind_speed_ms, d.wind_deg)}<br/>${d.heat_alert_label}`;
 
         const el = document.createElement("div");
         el.className = "weather-marker";
