@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title id="page-title">Delhi Urban Heat Monitor</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%8C%A1%EF%B8%8F</text></svg>" />
+    <script src="https://unpkg.com/maplibre-gl@3.x/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@3.x/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://unpkg.com/deck.gl@9/dist.min.js"></script>
+    <script src="https://unpkg.com/@loaders.gl/3d-tiles@4/dist/dist.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <link rel="stylesheet" href="style.css" />
+    <script src="city.js"></script>
+</head>
+<body>
+
+    <div id="map"></div>
+
+    <div class="panel panel-top-left">
+        <div id="city-switcher" class="city-switcher"></div>
+        <h1 id="page-heading">🌡️ Delhi Urban Heat Monitor</h1>
+        <p id="panel-description">Satellite-derived land surface temperature, vegetation and land cover across Delhi's 11 districts. Map layers refresh automatically every 6 hours.</p>
+        <div id="data-updated" class="muted"></div>
+        <div id="index-error-banner"></div>
+        <div class="panel-nav">
+            <a href="analytics.html" data-nav-page="analytics.html">📊 Full Analytics</a>
+            <a href="roadmap.html" data-nav-page="roadmap.html">🛰️ Roadmap</a>
+        </div>
+    </div>
+
+    <div class="panel panel-top-right" id="layer-panel">
+        <h2>Layers</h2>
+        <label><input type="checkbox" id="toggle-lst" checked /> 🌡️ Land Surface Temperature</label>
+        <label><input type="checkbox" id="toggle-ndvi" /> 🌿 Vegetation Index (NDVI)</label>
+        <label><input type="checkbox" id="toggle-landcover" /> 🌍 Land Cover</label>
+        <label><input type="checkbox" id="toggle-districts" checked /> 🗺️ <span id="toggle-districts-label">District Boundaries</span></label>
+        <label><input type="checkbox" id="toggle-wards" /> 📍 <span id="toggle-wards-label">Ward Boundaries (290, click to inspect)</span></label>
+        <label><input type="checkbox" id="toggle-jj-clusters" /> <span id="toggle-complementary-label">🏘️ Informal Settlements (685, click to inspect)</span></label>
+        <label><input type="checkbox" id="toggle-weather" checked /> 🌤️ Weather Markers</label>
+        <label><input type="checkbox" id="toggle-wind-field" /> 🌬️ Wind Field (animated, interpolated)</label>
+        <label><input type="checkbox" id="toggle-3d-buildings" /> 🏢 3D Buildings (zoom in to see)</label>
+        <label><input type="checkbox" id="toggle-photorealistic-3d" /> 📷 Photorealistic 3D (Google, beta — replaces map view)</label>
+    </div>
+
+    <div class="legend" id="legend-lst">
+        <div class="legend-title">🌡️ LST Legend (°C)</div>
+        <div class="legend-gradient" id="legend-lst-gradient"></div>
+        <div class="legend-scale" id="legend-lst-scale"></div>
+    </div>
+
+    <div class="legend" id="legend-ndvi" style="display:none;">
+        <div class="legend-title">🌿 NDVI Legend</div>
+        <div class="legend-gradient" id="legend-ndvi-gradient"></div>
+        <div class="legend-scale"><span>-0.3</span><span>1.0</span></div>
+    </div>
+
+    <div class="legend" id="legend-landcover" style="display:none;">
+        <div class="legend-title">🌍 Land Cover Legend</div>
+        <div class="legend-items" id="legend-landcover-items"></div>
+    </div>
+
+    <div class="panel panel-bottom" id="bottom-panel">
+        <div class="bottom-tabs">
+            <button class="tab-btn active" data-tab="chart">📈 Time Series (LST)</button>
+            <button class="tab-btn" data-tab="alerts">🔥 Heat Alerts</button>
+        </div>
+        <div class="tab-content" id="tab-chart">
+            <div class="date-range-controls">
+                <label>From <input type="date" id="ts-start-date" /></label>
+                <label>To <input type="date" id="ts-end-date" /></label>
+            </div>
+            <canvas id="lst-chart" height="90"></canvas>
+        </div>
+        <div class="tab-content" id="tab-alerts" style="display:none;">
+            <div id="weather-updated" class="muted"></div>
+            <div id="heat-alerts-list">Loading weather…</div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

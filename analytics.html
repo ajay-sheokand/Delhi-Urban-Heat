@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title id="page-title">Analytics | Delhi Urban Heat Monitor</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%93%8A</text></svg>" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <link rel="stylesheet" href="style.css" />
+    <script src="city.js"></script>
+</head>
+<body class="doc-page">
+
+    <nav class="site-nav">
+        <span class="brand" id="site-brand">🌡️ Delhi Urban Heat Monitor</span>
+        <div id="city-switcher" class="city-switcher"></div>
+        <a href="index.html" data-nav-page="index.html">Map</a>
+        <a href="analytics.html" data-nav-page="analytics.html" class="active">Analytics</a>
+        <a href="roadmap.html" data-nav-page="roadmap.html">Roadmap</a>
+    </nav>
+
+    <div class="page-container">
+        <div class="page-header">
+            <h1 id="page-heading">📊 District Analytics</h1>
+            <p id="page-intro">Urban heat island intensity, vegetation-temperature correlation, and land-cover composition across Delhi's 11 districts. Computed server-side from a rolling satellite/weather window and refreshed every 6 hours — not a live per-visit computation.</p>
+            <div id="data-updated" class="muted"></div>
+            <div id="analytics-error-banner"></div>
+        </div>
+
+        <div id="summary-stats" class="stat-grid">Loading analytics…</div>
+
+        <h2 class="section-title">Urban Heat Island — Air Temperature</h2>
+        <p class="muted" id="air-temp-caveat">NASA POWER's air temperature grid is roughly 50km — coarser than Delhi's districts, so district-to-district air-temperature differences below are naturally small. The surface UHI chart (Landsat LST, 100m resolution) is the more spatially meaningful comparison.</p>
+        <div class="chart-grid">
+            <div class="chart-card">
+                <h3 id="uhi-air-chart-title">UHI Intensity by District (deviation from citywide mean air temp)</h3>
+                <canvas id="uhi-air-chart"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3 id="uhi-surface-chart-title">Surface UHI by District (LST vs cropland baseline)</h3>
+                <canvas id="uhi-surface-chart"></canvas>
+            </div>
+        </div>
+
+        <h2 class="section-title">Air Temperature vs Land Surface Temperature</h2>
+        <div class="chart-grid">
+            <div class="chart-card">
+                <h3 id="air-lst-scatter-title">Air Temp vs LST by District</h3>
+                <canvas id="air-lst-scatter"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>NDVI vs LST (pixel samples, with trend line)</h3>
+                <canvas id="ndvi-lst-scatter"></canvas>
+            </div>
+        </div>
+
+        <h2 class="section-title">Land Cover Composition</h2>
+        <div class="chart-grid">
+            <div class="chart-card">
+                <h3>Sampled Area Share by Land Cover Type</h3>
+                <canvas id="landcover-share-chart"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>LST by Land Cover Type Over Time (current window)</h3>
+                <canvas id="lulc-time-chart"></canvas>
+            </div>
+        </div>
+
+        <h2 class="section-title">Long-Term Trends</h2>
+        <p class="muted">Unlike the charts above (current rolling window), these use the full ~2-year Landsat record. The land-cover trend recomputes weekly rather than every 6 hours — it's a heavier query across the whole history.</p>
+        <div class="chart-grid">
+            <div class="chart-card">
+                <h3>Citywide Mean LST, Monthly (full history)</h3>
+                <canvas id="long-term-lst-chart"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>LST by Land Cover Type, Monthly (full history)</h3>
+                <canvas id="long-term-lulc-chart"></canvas>
+            </div>
+        </div>
+
+        <h2 class="section-title" id="ward-vulnerability-heading">Heat Vulnerability by Ward</h2>
+        <p class="muted" id="ward-vulnerability-intro"></p>
+        <div id="ward-vulnerability-meta" class="muted"></div>
+        <div class="chart-grid">
+            <div class="chart-card" style="grid-column: 1 / -1;">
+                <h3 id="ward-vulnerability-chart-title">Top 20 Most Vulnerable Wards</h3>
+                <canvas id="ward-vulnerability-chart"></canvas>
+            </div>
+        </div>
+        <div class="data-table-wrap">
+            <table class="data-table" id="ward-vulnerability-table">
+                <thead>
+                    <tr><th id="ward-table-header-name">Ward</th><th>LST (°C)</th><th>NDVI</th><th>Population Density (/km²)</th><th>Vulnerability Score</th><th id="ward-table-header-complementary">JJ Clusters</th></tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <div data-city-section="delhi">
+            <h2 class="section-title">Informal Settlements: A Complementary Risk Layer</h2>
+            <p class="muted">
+                Delhi's official JJ (Jhuggi-Jhopri) clusters — squatter settlements on public land, mapped by DUSIB
+                (Delhi Urban Shelter Improvement Board) — are a separate housing category from the general
+                heat/vegetation/density signal the vulnerability score above is built from. We checked whether the two
+                actually line up, expecting some overlap. They mostly don't: the correlation between vulnerability score
+                and JJ-cluster household density across all 290 wards is <strong id="jj-correlation-value">—</strong>,
+                and most of the top-ranked wards by vulnerability score (the dense, hot, green-poor Northeast Delhi belt)
+                contain <strong>zero</strong> officially mapped JJ clusters. That's not a data error — Delhi's dense
+                unplanned housing spans several distinct legal categories (JJ clusters, unauthorized colonies, urban
+                villages), and DUSIB's list covers only one of them. The practical implication: a ward can score low here
+                on satellite-visible heat and density while still containing residents facing real housing-specific risk
+                (informal construction, no piped water or drainage, insecure tenure) that LST/NDVI/population data simply
+                cannot see. Treat this layer as <em>additional</em> information about who is at risk, not as a check on
+                whether the score above is "correct." See the map's "Informal Settlements" layer to click into individual
+                clusters.
+            </p>
+            <div id="jj-cluster-meta" class="muted"></div>
+            <div class="chart-grid">
+                <div class="chart-card">
+                    <h3>Vulnerability Score vs JJ-Cluster Household Density, by Ward</h3>
+                    <canvas id="jj-cluster-scatter-chart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div data-city-section="muenster" style="display:none;">
+            <h2 class="section-title">Elderly Population: A Complementary Risk Layer</h2>
+            <p class="muted">
+                Age is the single largest heat-mortality risk factor documented in German heat-health research — it's
+                literally why DWD's own heat-warning model has a dedicated "Klima-Michel Senior" variant. The
+                vulnerability score above has no age data in it at all (LST, NDVI, and general population density
+                only), so this checks whether it happens to line up anyway with Zensus 2022's 100m population grid
+                (ages 65+), spatially joined to wards. Citywide correlation between vulnerability score and elderly
+                population density: <strong id="elderly-correlation-value">—</strong>. Read this as a second,
+                independent lens on risk — a ward can score low above while still having a large elderly population
+                whose heat sensitivity the satellite/density-only score can't see — not as a check on whether the
+                score is "correct." See the map's "Elderly Population" layer to click into individual grid cells.
+                One data caveat: Germany's federal statistical disclosure control suppresses very small counts per
+                grid cell for privacy, so true elderly counts in sparsely populated cells are somewhat
+                underestimated here.
+            </p>
+            <div id="elderly-meta" class="muted"></div>
+            <div class="chart-grid">
+                <div class="chart-card">
+                    <h3>Vulnerability Score vs Elderly Population Density, by Ward</h3>
+                    <canvas id="elderly-scatter-chart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <h2 class="section-title">Land Cover Statistics</h2>
+        <div class="data-table-wrap">
+            <table class="data-table" id="landcover-table">
+                <thead>
+                    <tr><th>Land Cover</th><th>Area Share</th><th>Mean LST (°C)</th><th>Mean NDVI</th><th>Samples</th></tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <h2 class="section-title" id="district-table-heading">District Comparison</h2>
+        <div class="data-table-wrap">
+            <table class="data-table" id="district-table">
+                <thead>
+                    <tr><th id="district-table-header-name">District</th><th>Mean LST (°C)</th><th>Mean NDVI</th><th>Air Temp (°C)</th><th>Air UHI (°C)</th><th>Surface UHI (°C)</th></tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script src="analytics.js"></script>
+</body>
+</html>
