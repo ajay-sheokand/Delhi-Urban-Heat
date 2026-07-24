@@ -1,4 +1,5 @@
 import json
+import math
 import os
 from datetime import datetime, timedelta
 
@@ -945,6 +946,83 @@ def build_historical_trends_dataset(region: ee.Geometry) -> dict:
     }
 
 
+def _wind_to_vector(speed_ms: float, deg: float):
+    """wind_deg is meteorological convention (direction the wind blows FROM). Converts to
+    a (u, v) vector - eastward/northward components - in the direction the wind blows TOWARD,
+    since vector components need to be additive/interpolatable; deg alone isn't (359° and 1°
+    are neighbors, not far apart, so interpolating the angle directly is wrong)."""
+    toward_rad = math.radians((deg + 180) % 360)
+    u = speed_ms * math.sin(toward_rad)
+    v = speed_ms * math.cos(toward_rad)
+    return u, v
+
+
+def _vector_to_wind(u: float, v: float):
+    speed = math.hypot(u, v)
+    if speed < 1e-9:
+        return 0.0, 0.0
+    toward_deg = math.degrees(math.atan2(u, v)) % 360
+    from_deg = (toward_deg + 180) % 360
+    return speed, from_deg
+
+
+def build_wind_field(districts: list, grid_size: int = 8) -> dict:
+    """Inverse-distance-weighted interpolation of the real per-district wind readings onto a
+    regular lat/lon grid, for an animated "wind field" visualization. Honesty note: this is
+    interpolated from ~9-11 real point readings, not a measured grid - it fills in plausible
+    values between known points, the same way the ward vulnerability score is explicit about
+    being an exposure-only proxy rather than a validated index. Treat the field as illustrative
+    of general flow, not as a real reading at any point that isn't one of the source districts.
+    """
+    pts = [
+        (d["lat"], d["lon"], d["wind_speed_ms"], d["wind_deg"])
+        for d in districts
+        if d.get("wind_speed_ms") is not None and d.get("wind_deg") is not None
+    ]
+    if len(pts) < 2:
+        return {"grid_size": 0, "cells": [], "method": "idw_from_district_points"}
+
+    lats = [p[0] for p in pts]
+    lons = [p[1] for p in pts]
+    lat_min, lat_max = min(lats), max(lats)
+    lon_min, lon_max = min(lons), max(lons)
+    lat_pad = (lat_max - lat_min) * 0.15 or 0.05
+    lon_pad = (lon_max - lon_min) * 0.15 or 0.05
+    lat_min, lat_max = lat_min - lat_pad, lat_max + lat_pad
+    lon_min, lon_max = lon_min - lon_pad, lon_max + lon_pad
+
+    vectors = [(lat, lon, *_wind_to_vector(speed, deg)) for lat, lon, speed, deg in pts]
+
+    cells = []
+    for i in range(grid_size):
+        for j in range(grid_size):
+            glat = lat_min + (lat_max - lat_min) * i / (grid_size - 1)
+            glon = lon_min + (lon_max - lon_min) * j / (grid_size - 1)
+            exact = None
+            weight_sum = u_sum = v_sum = 0.0
+            for lat, lon, u, v in vectors:
+                dist_sq = (lat - glat) ** 2 + (lon - glon) ** 2
+                if dist_sq < 1e-12:
+                    exact = (u, v)
+                    break
+                weight = 1.0 / dist_sq
+                weight_sum += weight
+                u_sum += u * weight
+                v_sum += v * weight
+            u_i, v_i = exact if exact else (u_sum / weight_sum, v_sum / weight_sum)
+            speed_i, deg_i = _vector_to_wind(u_i, v_i)
+            cells.append(
+                {
+                    "lat": round(glat, 5),
+                    "lon": round(glon, 5),
+                    "wind_speed_ms": round(speed_i, 2),
+                    "wind_deg": round(deg_i, 1),
+                }
+            )
+
+    return {"grid_size": grid_size, "cells": cells, "method": "idw_from_district_points"}
+
+
 def build_weather_dataset(city: dict) -> dict:
     api_key = os.environ.get("OPENWEATHER_API_KEY", "").strip()
     if not api_key:
@@ -988,6 +1066,7 @@ def build_weather_dataset(city: dict) -> dict:
     return {
         "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "districts": districts,
+        "wind_field": build_wind_field(districts),
     }
 
 

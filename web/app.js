@@ -759,6 +759,8 @@ async function loadWeather() {
         markers.forEach((m) => (e.target.checked ? m.addTo(map) : m.remove()));
     });
 
+    wireWindFieldLayer(data.wind_field);
+
     const sorted = [...districts].sort((a, b) => b.temp_c - a.temp_c);
     alertsList.innerHTML = sorted
         .map(
@@ -766,6 +768,37 @@ async function loadWeather() {
                 `<div class="alert-row"><span>${d.name}</span><span class="alert-${d.heat_alert_level}">${d.temp_c.toFixed(1)}°C — ${d.heat_alert_label}</span></div>`
         )
         .join("");
+}
+
+// Grid interpolated server-side (inverse-distance weighting) from the same ~9-11 real district
+// wind readings above (build_wind_field() in the precompute script) - illustrative of general
+// flow across the city, not real per-point measurements. Each arrow points in the direction the
+// wind blows TOWARD (opposite of wind_deg's meteorological "from" convention, since "where is it
+// going" reads more naturally for a flow visualization), and pulses faster for stronger wind.
+function windArrowDuration(speedMs) {
+    const kmh = speedMs * 3.6;
+    return Math.max(0.35, 1.8 - kmh * 0.05).toFixed(2) + "s";
+}
+
+function wireWindFieldLayer(windField) {
+    const checkbox = document.getElementById("toggle-wind-field");
+    if (!checkbox) return;
+    const cells = windField?.cells || [];
+
+    const markers = cells.map((c) => {
+        const towardDeg = (c.wind_deg + 180) % 360;
+        const el = document.createElement("div");
+        el.className = "wind-arrow";
+        el.style.setProperty("--wind-rot", `${towardDeg}deg`);
+        el.style.setProperty("--wind-duration", windArrowDuration(c.wind_speed_ms));
+        el.title = `Interpolated: ${fmtWind(c.wind_speed_ms, c.wind_deg)}`;
+        return new maplibregl.Marker({ element: el }).setLngLat([c.lon, c.lat]);
+    });
+
+    if (checkbox.checked) markers.forEach((m) => m.addTo(map));
+    checkbox.addEventListener("change", (e) => {
+        markers.forEach((m) => (e.target.checked ? m.addTo(map) : m.remove()));
+    });
 }
 
 function alertColor(level) {
