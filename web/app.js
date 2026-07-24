@@ -857,10 +857,15 @@ const METERS_PER_DEG_LAT = 111320;
 // coverage for Delhi, so the particle count is scaled up to match trail density.
 const WIND_PARTICLE_COUNT = 700;
 // Real wind speeds (a few m/s) are imperceptible as real-world-scale motion over a ~50km
-// city view in a few seconds - this scales displayed motion for legibility. Stylized, like
-// the rest of this visualization; not a physical simulation.
-const WIND_PARTICLE_SPEED_SCALE = 12000;
-const WIND_PARTICLE_MAX_AGE = 90;
+// city view - this scales displayed motion for legibility, but it should still read as a
+// real breeze, not a gale. At Delhi's default zoom (10) and a typical current reading
+// (~4 m/s), 850 works out to roughly 25 screen px/s - crossing a 1400px-wide view in
+// ~55s, a calm drift rather than a sprint. (The previous value, 12000, worked out to
+// ~360 px/s at the same conditions - the whole visible city in under 4 seconds, which is
+// what actually prompted this change.) Necessarily zoom-dependent like any map-space
+// animation: the same real wind covers more screen pixels/sec zoomed in, fewer zoomed out.
+const WIND_PARTICLE_SPEED_SCALE = 850;
+const WIND_PARTICLE_MAX_AGE = 240;
 
 let windFieldAnimation = null;
 
@@ -915,9 +920,13 @@ function startWindFieldAnimation(windField) {
         const h = canvas.clientHeight;
         // Fades existing trail pixels toward transparent (multiplies their alpha) rather
         // than clearing outright, which is what actually produces the trailing-streak look
-        // instead of single disconnected dashes.
+        // instead of single disconnected dashes. Trail *length* on screen is distance
+        // covered before this decays to invisible, i.e. speed x persistence together -
+        // slowing WIND_PARTICLE_SPEED_SCALE down without raising this would leave trails
+        // looking like short stubby dots rather than flowing lines, so persistence went up
+        // to compensate and keep roughly the same visible trail length as before.
         ctx.globalCompositeOperation = "destination-in";
-        ctx.fillStyle = "rgba(0,0,0,0.90)";
+        ctx.fillStyle = "rgba(0,0,0,0.985)";
         ctx.fillRect(0, 0, w, h);
         ctx.globalCompositeOperation = "source-over";
         ctx.lineWidth = 1.4;
