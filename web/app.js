@@ -787,12 +787,21 @@ function wireWindFieldLayer(windField) {
 
     const markers = cells.map((c) => {
         const towardDeg = (c.wind_deg + 180) % 360;
-        const el = document.createElement("div");
-        el.className = "wind-arrow";
-        el.style.setProperty("--wind-rot", `${towardDeg}deg`);
-        el.style.setProperty("--wind-duration", windArrowDuration(c.wind_speed_ms));
-        el.title = `Interpolated: ${fmtWind(c.wind_speed_ms, c.wind_deg)}`;
-        return new maplibregl.Marker({ element: el }).setLngLat([c.lon, c.lat]);
+        // MapLibre positions a Marker by writing its own inline `transform: translate(...)`
+        // directly onto the element passed to `element:`. A CSS animation that also animates
+        // `transform` on that SAME element fully replaces it while running (animations don't
+        // compose with the underlying inline value) - so the rotate/pulse arrow can't be the
+        // positioned element itself, or its position collapses to (0,0) the moment the
+        // animation starts. Anchor (positioned by MapLibre, untouched by any animation) wraps
+        // arrow (animated, no positioning of its own).
+        const anchor = document.createElement("div");
+        const arrow = document.createElement("div");
+        arrow.className = "wind-arrow";
+        arrow.style.setProperty("--wind-rot", `${towardDeg}deg`);
+        arrow.style.setProperty("--wind-duration", windArrowDuration(c.wind_speed_ms));
+        anchor.appendChild(arrow);
+        anchor.title = `Interpolated: ${fmtWind(c.wind_speed_ms, c.wind_deg)}`;
+        return new maplibregl.Marker({ element: anchor }).setLngLat([c.lon, c.lat]);
     });
 
     if (checkbox.checked) markers.forEach((m) => m.addTo(map));
