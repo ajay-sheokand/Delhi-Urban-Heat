@@ -842,7 +842,7 @@ def build_ward_vulnerability_dataset(
     # native ~1.1km pixel needs scale=1113, not the 100m scale LST/NDVI use.
     no2_rows = (
         no2_image.rename("NO2")
-        .reduceRegions(collection=ward_fc, reducer=ee.Reducer.mean(), scale=1113, tileScale=4, bestEffort=True)
+        .reduceRegions(collection=ward_fc, reducer=ee.Reducer.mean(), scale=1113, tileScale=4)
         .getInfo()
         .get("features", [])
     )
