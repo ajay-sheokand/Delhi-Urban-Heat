@@ -1,10 +1,46 @@
-# Urban Heat Monitoring Dashboard
+# 🌡️ Urban Heat Monitoring Dashboard
+
+[![Precompute Backend Data](https://github.com/ajay-sheokand/Delhi-Urban-Heat/actions/workflows/precompute-backend-data.yml/badge.svg)](https://github.com/ajay-sheokand/Delhi-Urban-Heat/actions/workflows/precompute-backend-data.yml)
+[![Live App](https://img.shields.io/badge/live%20app-ajay--sheokand.github.io-2ea44f)](https://ajay-sheokand.github.io/Delhi-Urban-Heat/)
+[![Python 3.11.8](https://img.shields.io/badge/python-3.11.8-blue)](runtime.txt)
 
 Static, precomputed dashboard for monitoring urban heat, now covering two cities — Delhi, India and Münster, Germany — with a one-click switcher between them. Started as a Delhi-only project; see [Multi-City Support](#multi-city-support) for how the second city was added and what does/doesn't carry over between them.
 
-Live app: `https://ajay-sheokand.github.io/Delhi-Urban-Heat/` (add `?city=muenster` for Münster, or use the in-app switcher)
+**Live app:** `https://ajay-sheokand.github.io/Delhi-Urban-Heat/` (add `?city=muenster` for Münster, or use the in-app switcher)
 
-A legacy Streamlit dashboard (`app.py`) is still in the repo but is no longer the primary/linked app, and covers Delhi only — see [Legacy Streamlit App](#legacy-streamlit-app).
+> A legacy Streamlit dashboard (`app.py`) is still in the repo but is no longer the primary/linked app, and covers Delhi only — see [Legacy Streamlit App](#legacy-streamlit-app).
+
+## Table of Contents
+
+- [Scope](#scope)
+- [What The Static Frontend Shows](#what-the-static-frontend-shows)
+- [Key UI Behavior](#key-ui-behavior)
+- [Multi-City Support](#multi-city-support)
+- [Data Sources](#data-sources)
+- [Variables & Calculations](#variables--calculations)
+  - [Land Surface Temperature (LST)](#land-surface-temperature-lst)
+  - [NDVI](#ndvi)
+  - [Cloud / Shadow / Snow / Cirrus Masking](#cloud--shadow--snow--cirrus-masking)
+  - [Land Cover Classes (ESA WorldCover v200)](#land-cover-classes-esa-worldcover-v200)
+  - [District / Ward Zonal Statistics](#district--ward-zonal-statistics)
+  - [Air Temperature](#air-temperature)
+  - [Live Weather & Heat Alerts](#live-weather--heat-alerts)
+  - [Wind Field (interpolated, animated particle flow)](#wind-field-interpolated-animated-particle-flow)
+  - [Urban Heat Island Intensity — Air (`uhi_air_c`)](#urban-heat-island-intensity--air-uhi_air_c)
+  - [Urban Heat Island Intensity — Surface (`uhi_surface_c`)](#urban-heat-island-intensity--surface-uhi_surface_c)
+  - [NDVI ↔ LST Correlation](#ndvi--lst-correlation)
+  - [Cloud-Gap / Revisit Evidence (Roadmap page)](#cloud-gap--revisit-evidence-roadmap-page)
+  - [Population](#population)
+  - [Ward Vulnerability Score](#ward-vulnerability-score)
+  - [JJ Cluster Overlay & Vulnerability-Score Comparison](#jj-cluster-overlay--vulnerability-score-comparison)
+- [Known Limitations](#known-limitations)
+- [Project Structure](#project-structure)
+- [Static Frontend Setup (GitHub Pages)](#static-frontend-setup-github-pages)
+- [Legacy Streamlit App](#legacy-streamlit-app)
+- [Troubleshooting](#troubleshooting)
+- [Security](#security)
+
+---
 
 ## Scope
 
@@ -85,6 +121,8 @@ The site started Delhi-only; Münster was added as a second city with a full pag
 
 `delhi_wards.geojson` reflects the **pre-2022 delimitation** (the three erstwhile municipal corporations + NDMC + Delhi Cantonment) — no open, downloadable geometry file for the current unified 250-ward structure was found. Disclosed here and on the analytics page rather than presented as current.
 
+---
+
 ## Variables & Calculations
 
 Every derived number on the site traces back to one of the formulas below. Each entry cites the specification it was checked against — this section exists so that a constant like `0.00341802` isn't just "a number in the code," it's a number that can be independently verified.
@@ -118,7 +156,8 @@ Applied to `QA_PIXEL` before any LST/NDVI computation, so contaminated pixels ne
 | Cloud Shadow | 4 |
 | Snow | 5 |
 
-**Correctness note:** this was previously wrong in both `scripts/precompute_timeseries_backend.py` and `app.py` — the four bit shifts were off by one position each (e.g. bit 3 was labeled `cloud_shadow_bit` but bit 3 is actually `Cloud`; bit 7, labeled `cirrus_bit`, is actually `Water`). The mask still excluded four real flags (Cloud, Cloud Shadow, Snow, Water), just not the four it was named for, and it never excluded Cirrus at all. Verified against the official spec above and fixed in both files.
+> [!NOTE]
+> **Correctness note:** this was previously wrong in both `scripts/precompute_timeseries_backend.py` and `app.py` — the four bit shifts were off by one position each (e.g. bit 3 was labeled `cloud_shadow_bit` but bit 3 is actually `Cloud`; bit 7, labeled `cirrus_bit`, is actually `Water`). The mask still excluded four real flags (Cloud, Cloud Shadow, Snow, Water), just not the four it was named for, and it never excluded Cirrus at all. Verified against the official spec above and fixed in both files.
 
 ### Land Cover Classes (ESA WorldCover v200)
 
@@ -156,7 +195,8 @@ OpenWeather's Current Weather API, refreshed every 6h (not a live per-visit call
 2. A regular lat/lon grid (default 14×14) is built over `bbox` — each city's real full extent (`city["bbox_fallback"]` in `get_city_configs()`, the same box already used as the Earth Engine region fallback), not just the area spanned by the district reading points themselves. District centroids avoid administrative edges by construction, so a grid confined to their bounding box (still the fallback if no `bbox` is passed) systematically undercovered the city's actual periphery — extending to the real extent doesn't add signal at the edges (see the honesty note below), it just means the field visually covers where it previously stopped short.
 3. Each grid cell's vector is inverse-distance-weighted (`1/distance²`) from every district's vector, then converted back to a speed/direction.
 
-**Honesty note, same spirit as the [Ward Vulnerability Score](#ward-vulnerability-score)'s:** this is interpolated from a handful of real points, not a measured wind grid — treat it as illustrative of general flow, not as a real reading at any location that isn't one of the source districts. `wind_field.method` is literally the string `"idw_from_district_points"` in the raw JSON, so this is traceable in the data itself, not just in prose here. Extending the grid to each city's full extent makes this more visible, not less: cells near the edges are farther from every source district, so they're increasingly **extrapolated** from whichever single district happens to be nearest rather than genuinely interpolated between two or more — direction changes across the field are real (they reflect which real district reading dominates a given area, weighted by distance), but they're a product of the interpolation method and sparse input, not a measured spatial wind pattern.
+> [!NOTE]
+> **Honesty note, same spirit as the [Ward Vulnerability Score](#ward-vulnerability-score)'s:** this is interpolated from a handful of real points, not a measured wind grid — treat it as illustrative of general flow, not as a real reading at any location that isn't one of the source districts. `wind_field.method` is literally the string `"idw_from_district_points"` in the raw JSON, so this is traceable in the data itself, not just in prose here. Extending the grid to each city's full extent makes this more visible, not less: cells near the edges are farther from every source district, so they're increasingly **extrapolated** from whichever single district happens to be nearest rather than genuinely interpolated between two or more — direction changes across the field are real (they reflect which real district reading dominates a given area, weighted by distance), but they're a product of the interpolation method and sparse input, not a measured spatial wind pattern.
 
 **Rendering (`app.js`):** a windy.com/earth.nullschool-style particle trace, not discrete arrow icons — an earlier version rendered one rotating/pulsing arrow per grid cell, but a scale/opacity pulse with no actual translation reads as flicker, not flow, so it was replaced. `startWindFieldAnimation()` draws directly to a `<canvas>` overlaid on the map (`buildVectorGrid()`/`sampleVectorGrid()` bilinearly interpolate between the grid's nodes for smoother-than-196-points flow): ~700 particles are advected each frame along the locally-sampled `(u, v)` vector, each leaving a short trail segment; the previous frame is faded toward transparent rather than cleared outright (`globalCompositeOperation: "destination-in"`), which is what actually produces the trailing-streak look instead of disconnected dashes. Segment color is a stylized (not measurement-grade) teal→cyan→violet→magenta scale over Delhi's realistic ~0–8 m/s range (`windSpeedColor()`). On-screen particle speed is a multiplier (`WIND_PARTICLE_SPEED_SCALE`), not real-world-scale motion — actual wind speeds of a few m/s would be imperceptible over a ~50km view — but tuned to still read as a calm real breeze rather than an arbitrary "fast enough to look alive" pace: at Delhi's default zoom and a typical current reading (~4 m/s), particles cross the screen in roughly a minute, not a few seconds. (The value this replaced, tuned only for "does it look alive," worked out to crossing the whole visible city in well under 4 seconds at the same conditions — closer to a violent storm than the gentle breeze the real data described.) Trail-fade persistence was raised to compensate, since a slower particle needs longer visible persistence to draw the same length of flowing line, not just a shorter fade window producing short stubby dots. Trails are screen-space, so they're cleared on `movestart`/`zoomstart` rather than trying to keep them correctly transformed mid-gesture.
 
@@ -200,7 +240,8 @@ score = 100 * mean(
 
 Each component is min-max normalized to [0, 1] across all 290 wards before averaging (NDVI is inverted first, since *lower* NDVI should score as *more* vulnerable). Combining a heat-exposure layer (LST) with a greenness/cooling-capacity layer (NDVI) and a population-exposure layer (density) follows the general structure used in Heat Vulnerability Index (HVI) research, which typically pairs an exposure layer with a population/sensitivity layer.
 
-**Honesty note:** unlike published HVIs — e.g. the US CDC's Heat & Health Index — this score has **no socioeconomic or health-sensitivity inputs** (age, income, air-conditioning access, pre-existing health conditions). It is an *exposure-only* proxy built entirely from remote-sensing and gridded-population data, not a validated clinical or epidemiological vulnerability index. Read the ranking as "hot, green-poor, and dense," not as a certified risk score. Air temperature is deliberately excluded from this score entirely — see [Air Temperature](#air-temperature) above for why.
+> [!NOTE]
+> **Honesty note:** unlike published HVIs — e.g. the US CDC's Heat & Health Index — this score has **no socioeconomic or health-sensitivity inputs** (age, income, air-conditioning access, pre-existing health conditions). It is an *exposure-only* proxy built entirely from remote-sensing and gridded-population data, not a validated clinical or epidemiological vulnerability index. Read the ranking as "hot, green-poor, and dense," not as a certified risk score. Air temperature is deliberately excluded from this score entirely — see [Air Temperature](#air-temperature) above for why.
 
 ### JJ Cluster Overlay & Vulnerability-Score Comparison
 
@@ -208,11 +249,14 @@ Both cities compute a "complementary risk layer" through the same generic backen
 
 **Delhi — JJ clusters:** DUSIB's 685 mapped JJ (Jhuggi-Jhopri, i.e. informal settlement) cluster polygons, joined by centroid (not the source data's own `WARD_NO` attribute, which is missing/unusable for ~4% of rows — mostly Cantonment/NDMC clusters — while the geometry itself still resolves cleanly). Output fields: `jj_cluster_count`, `jj_cluster_households` (summed from `APPR_JHUGI`), `jj_household_density_km2`, `validation.jj_cluster_correlation_r`.
 
-**What we actually found for Delhi, checked against the live data rather than assumed:** the correlation is weak, and for raw cluster count it's slightly *negative* (density r ≈ 0.15, count r ≈ -0.16 at the time this was built). Most of the top-ranked wards by vulnerability score — the hot, dense, green-poor Northeast Delhi belt — contain **zero** officially mapped JJ clusters. This isn't a data quality problem: Delhi's unplanned housing spans several distinct legal categories (JJ clusters, unauthorized colonies, urban villages), and DUSIB's list covers only the first of those. A ward can score low on satellite-visible heat/density metrics while still containing residents facing real housing-specific risk (informal construction, no piped water or drainage, insecure tenure) that LST/NDVI/population data structurally cannot see.
+> [!IMPORTANT]
+> **What we actually found for Delhi, checked against the live data rather than assumed:** the correlation is weak, and for raw cluster count it's slightly *negative* (density r ≈ 0.15, count r ≈ -0.16 at the time this was built). Most of the top-ranked wards by vulnerability score — the hot, dense, green-poor Northeast Delhi belt — contain **zero** officially mapped JJ clusters. This isn't a data quality problem: Delhi's unplanned housing spans several distinct legal categories (JJ clusters, unauthorized colonies, urban villages), and DUSIB's list covers only the first of those. A ward can score low on satellite-visible heat/density metrics while still containing residents facing real housing-specific risk (informal construction, no piped water or drainage, insecure tenure) that LST/NDVI/population data structurally cannot see.
 
 **Münster — elderly population (65+):** Zensus 2022's 100m population-by-age grid, clipped to Münster, summed to 65+ per grid cell, joined by cell centroid (trivial for Point geometry — the centroid of a point is itself). Output fields: `elderly_grid_cell_count`, `elderly_population` (the value sum), `elderly_density_km2`, `validation.elderly_correlation_r`. Age is the single largest heat-mortality risk factor in the heat-health literature (it's why DWD's own model has a "Klima-Michel Senior" variant), so this is a genuinely meaningful independent check, not an arbitrary substitute for JJ clusters. One data caveat specific to this source: German federal statistical disclosure control suppresses very small per-cell counts for privacy (shown as `–` in the raw Zensus CSV), treated as 0 here, so true elderly counts in sparsely populated cells are somewhat underestimated.
 
 **In both cases, this overlay is presented as a complementary, independent risk signal, not as validation of the score above** — the on-site sections are explicit about whatever correlation was actually found (weak, for Delhi) and explain why, rather than implying agreement that isn't there.
+
+---
 
 ## Known Limitations
 
@@ -230,6 +274,8 @@ Both cities compute a "complementary risk layer" through the same generic backen
 - **Photorealistic 3D is a free-tier Cesium ion feature, not a permanent guarantee.** It's capped at 1,000 root-tile requests/month **account-wide** (shared across every visitor to the site, not per-visitor) — once exhausted for the month, the layer will fail to load until the quota resets, rather than degrading gracefully to a lower-detail view. The free tier is also restricted to non-commercial/individual use per Cesium ion's terms. Unlike the OpenFreeMap buildings layer, this is a full opaque mesh of the entire visible surface, so enabling it replaces the map's heat/vegetation/land-cover visualization rather than layering on top of it — it's an "explore" mode, not an additional data layer. The LST/NDVI/land-cover and boundary layers drawn on top of the mesh (see above) are themselves rendered at half opacity specifically to soften that replacement — they blend with the mesh rather than fully hiding it in turn.
 - **District/ward/complementary-layer boundaries, and LST/NDVI/land-cover, render on top of Photorealistic 3D as deck.gl layers (`GeoJsonLayer` for boundaries, `TileLayer`+`BitmapLayer` for the raster tiles) with `{ depthCompare: "always", depthWriteEnabled: false }`**, not the native MapLibre fill/line/raster layers (which stay hidden underneath, invisible). Two things were tried and ruled out first for the boundary case, honestly documented here since both seemed reasonable before testing: (1) draping 2D data onto the mesh's actual geometry via deck.gl's `TerrainExtension` has a confirmed, unresolved upstream bug in interleaved mode for exactly this case ([visgl/deck.gl#7893](https://github.com/visgl/deck.gl/discussions/7893) — a maintainer reproduced it and it doesn't drape); (2) simply reordering the native MapLibre boundary layers to draw after the mesh (`map.moveLayer`) does nothing — verified directly with a bright 6px test line that stayed completely invisible, because once the interleaved 3D layer writes real depth values, MapLibre's own 2D layers get depth-tested against it regardless of paint order. Disabling depth comparison on a deck.gl layer is what actually works, since it bypasses the depth buffer entirely rather than relying on draw order — but `depthCompare: "always"` alone only disables the *test*; deck.gl's default `depthWriteEnabled: true` still applies, meaning these flat overlay layers were still writing their own (mostly meaningless, ground-level) depth values into the shared depth buffer. That caused visible flicker while rotating the camera over Photorealistic 3D, because the mesh's own internal depth test — comparing its real, sub-tile-varying depth against those stale overlay writes — became inconsistent frame to frame as viewing angle and floating-point precision shifted. Adding `depthWriteEnabled: false` alongside `depthCompare: "always"` stops these layers from touching the depth buffer at all, so stacking is governed purely by array draw order, independent of the mesh underneath. The same fix is reused for LST/NDVI/land-cover: each is re-fetched as the same Earth Engine XYZ tile URL already used by the flat map, wrapped in a depth-disabled `TileLayer`, so toggling those layers on now shows the heat/vegetation/land-cover data draped over the photorealistic mesh rather than replacing it outright. One extra gotcha specific to the raster case: `TileLayer`'s default tile-loading path decodes fetched tiles via a loaders.gl `ImageLoader`, but this page only loads `deck.gl` core and `@loaders.gl/3d-tiles` (for the mesh itself) — `@loaders.gl/images` is never on the page, and `deck.gl`'s own UMD bundle doesn't bundle it either (confirmed absent from the built bundle) — so the default path fetches tile bytes but has nothing to decode them into a usable image, and nothing draws. Fixed with a custom `getTileData` that fetches and decodes via the browser's native `createImageBitmap` instead, sidestepping loaders.gl entirely for this one path. The ward boundary line is deliberately drawn thicker here (`lineWidthUnits: "pixels"`, 2.5px fixed) than its flat-map counterpart, for legibility against the busier photorealistic imagery. Weather markers were already visible on top regardless, since they're DOM elements, not WebGL layers.
 - **`maxBounds` keeps the map (and therefore all tile requests, including the metered Photorealistic 3D ones) confined to each city's real extent** — computed directly from `delhi_wards.geojson`/`muenster_wards.geojson`'s actual bounds plus padding, not guessed. This stops users from panning globally and burning the shared Cesium ion quota on unrelated places. One real caveat: at 60° pitch (used by both 3D toggles), the camera looks toward the horizon, and a tilted view can still see — and stream tiles for — a modest strip of terrain just past the `maxBounds` edge, since `maxBounds` constrains the 2D pan/center position, not the 3D viewing frustum's far extent. It substantially reduces out-of-area tile requests, not eliminates every last one at a steep pitch.
+
+---
 
 ## Project Structure
 
@@ -252,6 +298,8 @@ Both cities compute a "complementary risk layer" through the same generic backen
 - `requirements.txt`: Python dependencies
 - `runtime.txt`: Python runtime pin
 
+---
+
 ## Static Frontend Setup (GitHub Pages)
 
 The static frontend and its data are published together to the `gh-pages` branch by the same workflow, so setup is a single flow:
@@ -271,6 +319,8 @@ The static frontend and its data are published together to the `gh-pages` branch
 4. Visit `https://<your-github-username>.github.io/<your-repo-name>/` — this now serves `web/index.html` directly, defaulting to Delhi and reading `map_layers.json`, `district_analytics.json`, `weather.json`, `timeseries_scenes.json`, and `ward_vulnerability.json` from `delhi/` on the same site (plus the static `delhi_wards.geojson` / `delhi_jj_clusters.geojson`). Add `?city=muenster` (or use the in-app switcher) for Münster, reading the same filenames from `muenster/` plus `muenster_wards.geojson` / `muenster_elderly_population.geojson`. `analytics.html` and `roadmap.html` are linked from the map's top-left panel and preserve whichever city is currently selected.
 
 The workflow re-runs every 6 hours, regenerating the precomputed JSON files for **both cities** (including fresh Earth Engine tile URLs and fresh weather readings) and republishing everything to `gh-pages`. Each precomputed file has its own try/except in the script, per city — if one fails (e.g. a transient EE or NASA POWER error), the previous version of that file is left in place rather than failing the whole run (the workflow's "Seed backend-data from previous publish" step is what makes that fallback real: it pulls the current live copy of each city's files before the script runs, so a skipped or failed dataset republishes unchanged instead of vanishing).
+
+---
 
 ## Legacy Streamlit App
 
@@ -337,6 +387,8 @@ The Streamlit app can also read the same precomputed `timeseries_scenes.json` fo
 - LST/NDVI values look slightly different from before a given date:
   - The `QA_PIXEL` cloud-masking bit positions were corrected (see [Cloud / Shadow / Snow / Cirrus Masking](#cloud--shadow--snow--cirrus-masking)) — composites after that fix exclude Cirrus-contaminated pixels that previously slipped through, and no longer misidentify which flag they were masking. Expect small, real shifts in LST/NDVI values, not a bug.
 
+---
+
 ## Security
 
 - Keep `.streamlit/secrets.toml` out of git.
@@ -346,6 +398,8 @@ The Streamlit app can also read the same precomputed `timeseries_scenes.json` fo
 - `CESIUM_ION_TOKEN` is the one deliberate exception: it's a client-side-by-design token (powers the Photorealistic 3D map toggle directly from the browser) that ends up in the published `app.js`. It's still stored as a GitHub Actions secret and injected at publish time rather than committed to source, so it doesn't sit in plaintext git history — but real protection against abuse is the URL restriction on the token itself in the Cesium ion dashboard (restrict it to your GitHub Pages domain), not secrecy, since any visitor's browser can read it from the deployed page regardless.
 
 For educational and research use.
+
+---
 
 ## Last Updated
 
