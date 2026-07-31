@@ -113,33 +113,52 @@ async function loadMapLayers() {
     addRasterLayer("lst", lst.tile_url, lst.opacity, true);
     addRasterLayer("ndvi", ndvi.tile_url, ndvi.opacity, false);
     addRasterLayer("landcover", land_cover.tile_url, land_cover.opacity, false);
-    addRasterLayer("no2", no2.tile_url, no2.opacity, false);
-    addRasterLayer("co", co.tile_url, co.opacity, false);
-    addRasterLayer("ch4", ch4.tile_url, ch4.opacity, false);
 
     rasterLayerCache = {
         lst: { tileUrl: lst.tile_url, opacity: lst.opacity },
         ndvi: { tileUrl: ndvi.tile_url, opacity: ndvi.opacity },
         landcover: { tileUrl: land_cover.tile_url, opacity: land_cover.opacity },
-        no2: { tileUrl: no2.tile_url, opacity: no2.opacity },
-        co: { tileUrl: co.tile_url, opacity: co.opacity },
-        ch4: { tileUrl: ch4.tile_url, opacity: ch4.opacity },
     };
 
     renderLstLegend(lst.min, lst.max, lst.palette);
     renderLandCoverLegend(land_cover.classes, land_cover.histogram);
-    // Sentinel-5P column densities are tiny numbers in raw mol/m² (NO2/CO) - scaled to
-    // µmol/m²/mmol/m² here purely for legend readability, same underlying data either way.
-    renderGradientLegend("no2", no2.min, no2.max, no2.palette, (v) => `${(v * 1e6).toFixed(0)} µmol/m²`);
-    renderGradientLegend("co", co.min, co.max, co.palette, (v) => `${(v * 1e3).toFixed(1)} mmol/m²`);
-    renderGradientLegend("ch4", ch4.min, ch4.max, ch4.palette, (v) => `${v.toFixed(0)} ppb`);
 
     wireToggle("toggle-lst", "lst-layer", "legend-lst");
     wireToggle("toggle-ndvi", "ndvi-layer", "legend-ndvi");
     wireToggle("toggle-landcover", "landcover-layer", "legend-landcover");
-    wireToggle("toggle-no2", "no2-layer", "legend-no2");
-    wireToggle("toggle-co", "co-layer", "legend-co");
-    wireToggle("toggle-ch4", "ch4-layer", "legend-ch4");
+
+    // Sentinel-5P column densities are tiny numbers in raw mol/m² (NO2/CO) - scaled to
+    // µmol/m²/mmol/m² here purely for legend readability, same underlying data either way.
+    // Any of these three can be absent from the JSON entirely: the backend omits a pollutant
+    // rather than publish a blank layer when a city has zero valid retrievals for it even
+    // after its retry composite (e.g. CH4 over Delhi during monsoon - TROPOMI's SWIR-based
+    // CH4 retrieval needs clear-sky scenes). Missing here just means "no data this run", not
+    // a bug - disable the toggle and say so instead of adding a layer/source that can't load.
+    wirePollutantLayer("no2", no2, "toggle-no2", "legend-no2", (v) => `${(v * 1e6).toFixed(0)} µmol/m²`);
+    wirePollutantLayer("co", co, "toggle-co", "legend-co", (v) => `${(v * 1e3).toFixed(1)} mmol/m²`);
+    wirePollutantLayer("ch4", ch4, "toggle-ch4", "legend-ch4", (v) => `${v.toFixed(0)} ppb`);
+}
+
+function wirePollutantLayer(key, layerData, checkboxId, legendId, formatValue) {
+    const checkbox = document.getElementById(checkboxId);
+    if (!layerData) {
+        if (checkbox) {
+            checkbox.checked = false;
+            checkbox.disabled = true;
+            checkbox.title = "No valid satellite data for this pollutant in the current composite window (common for CH4 during Delhi's monsoon) - check back later.";
+        }
+        const legend = document.getElementById(legendId);
+        if (legend) legend.style.display = "none";
+        return;
+    }
+    if (checkbox) {
+        checkbox.disabled = false;
+        checkbox.title = "";
+    }
+    addRasterLayer(key, layerData.tile_url, layerData.opacity, false);
+    rasterLayerCache[key] = { tileUrl: layerData.tile_url, opacity: layerData.opacity };
+    renderGradientLegend(key, layerData.min, layerData.max, layerData.palette, formatValue);
+    wireToggle(checkboxId, `${key}-layer`, legendId);
 }
 
 function addRasterLayer(key, tileUrl, opacity, visible) {

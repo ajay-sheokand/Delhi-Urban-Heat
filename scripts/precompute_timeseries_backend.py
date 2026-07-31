@@ -424,28 +424,56 @@ def build_map_layers_dataset(
     lst_clipped = lst_image.clip(region)
     ndvi_clipped = ndvi_image.clip(region)
 
-    def pollutant_layer(image, band, fallback_min, fallback_max, palette, scale=1113):
-        """Shared clip/minmax/getMapId path for the three Sentinel-5P pollutant
-        layers below - same dynamic-range-with-fallback pattern as LST above,
-        just factored out since it's used three times. scale=1113 matches S5P's
-        native ~1.1km pixel (vs 100m for the Landsat-derived layers)."""
+    def pollutant_stats(image, band, scale):
         clipped = image.clip(region)
+        stats = clipped.reduceRegion(
+            reducer=ee.Reducer.minMax(),
+            geometry=region,
+            scale=scale,
+            maxPixels=1e9,
+            bestEffort=True,
+            tileScale=4,
+        ).getInfo()
+        data_min = stats.get(f"{band}_min")
+        data_max = stats.get(f"{band}_max")
+        if data_min is None or data_max is None:
+            return None
+        return clipped, data_min, data_max
+
+    def pollutant_layer(image, band, dataset_id, palette, scale=1113, retry_days=90):
+        """Shared clip/minmax/getMapId path for the three Sentinel-5P pollutant layers
+        below. Some pollutants (CH4 especially) can have zero valid retrievals in the
+        primary composite window over a given city - TROPOMI's SWIR-based CH4 retrieval
+        needs clear-sky scenes, and Delhi's monsoon-season cloud cover is a documented
+        cause of exactly this gap. In that case, retry once with a wider composite window
+        before giving up; if that's still empty, return None so the caller omits the layer
+        entirely rather than showing a blank tile under a fabricated legend range."""
+        result = None
         try:
-            stats = clipped.reduceRegion(
-                reducer=ee.Reducer.minMax(),
-                geometry=region,
-                scale=scale,
-                maxPixels=1e9,
-                bestEffort=True,
-                tileScale=4,
-            ).getInfo()
-            data_min = stats.get(f"{band}_min")
-            data_max = stats.get(f"{band}_max")
-            if data_min is None or data_max is None:
-                raise ValueError("empty reduceRegion result")
+            result = pollutant_stats(image, band, scale)
         except Exception as exc:
-            print(f"{band} min/max calculation failed, using fallback range: {exc}")
-            data_min, data_max = fallback_min, fallback_max
+            print(f"{band} min/max calculation failed: {exc}")
+
+        if result is None:
+            print(f"{band} has no valid pixels in the primary window, retrying with a {retry_days}-day composite")
+            try:
+                retry_start = (end_dt - timedelta(days=retry_days)).isoformat()
+                wide_image = (
+                    ee.ImageCollection(dataset_id)
+                    .filterDate(retry_start, end_dt.isoformat())
+                    .filterBounds(region)
+                    .select(band)
+                    .mean()
+                )
+                result = pollutant_stats(wide_image, band, scale)
+            except Exception as exc:
+                print(f"{band} retry composite failed too: {exc}")
+
+        if result is None:
+            print(f"{band} has no valid pixels even in the {retry_days}-day retry window - omitting layer")
+            return None
+
+        clipped, data_min, data_max = result
         mapid = clipped.getMapId({"min": data_min, "max": data_max, "palette": palette})
         return {
             "tile_url": mapid["tile_fetcher"].url_format,
@@ -497,55 +525,63 @@ def build_map_layers_dataset(
         land_cover_histogram = {}
 
     no2_layer = pollutant_layer(
-        no2_image, "tropospheric_NO2_column_number_density", 0, 0.0002, NO2_PALETTE
+        no2_image, "tropospheric_NO2_column_number_density", "COPERNICUS/S5P/OFFL/L3_NO2", NO2_PALETTE
     )
-    co_layer = pollutant_layer(co_image, "CO_column_number_density", 0, 0.05, CO_PALETTE)
+    co_layer = pollutant_layer(co_image, "CO_column_number_density", "COPERNICUS/S5P/OFFL/L3_CO", CO_PALETTE)
     ch4_layer = pollutant_layer(
-        ch4_image, "CH4_column_volume_mixing_ratio_dry_air", 1800, 1950, CH4_PALETTE
+        ch4_image, "CH4_column_volume_mixing_ratio_dry_air", "COPERNICUS/S5P/OFFL/L3_CH4", CH4_PALETTE
     )
+
+    layers = {
+        "lst": {
+            "tile_url": lst_mapid["tile_fetcher"].url_format,
+            "min": lst_min,
+            "max": lst_max,
+            "palette": LST_PALETTE,
+            "opacity": 0.6,
+        },
+        "ndvi": {
+            "tile_url": ndvi_mapid["tile_fetcher"].url_format,
+            "min": -0.3,
+            "max": 1,
+            "palette": NDVI_PALETTE,
+            "opacity": 0.45,
+        },
+        "land_cover": {
+            "tile_url": worldcover_mapid["tile_fetcher"].url_format,
+            "source": "ESA WorldCover 2021 (10m)",
+            "classes": WORLDCOVER_CLASSES,
+            "histogram": land_cover_histogram,
+            "opacity": 0.5,
+        },
+    }
+    # NO2/CO/CH4 can come back None (see pollutant_layer) when a pollutant has no valid
+    # retrievals even after the wider retry composite - omit the key entirely rather than
+    # publish a layer with no real data behind it.
+    if no2_layer is not None:
+        layers["no2"] = {
+            **no2_layer,
+            "opacity": 0.55,
+            "source": "Sentinel-5P NO2 (COPERNICUS/S5P/OFFL/L3_NO2), tropospheric column, mol/m²",
+        }
+    if co_layer is not None:
+        layers["co"] = {
+            **co_layer,
+            "opacity": 0.55,
+            "source": "Sentinel-5P CO (COPERNICUS/S5P/OFFL/L3_CO), column density, mol/m²",
+        }
+    if ch4_layer is not None:
+        layers["ch4"] = {
+            **ch4_layer,
+            "opacity": 0.55,
+            "source": "Sentinel-5P CH4 (COPERNICUS/S5P/OFFL/L3_CH4), column mixing ratio, ppb",
+        }
 
     return {
         "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "coverage_start": start_dt.isoformat(),
         "coverage_end": end_dt.isoformat(),
-        "layers": {
-            "lst": {
-                "tile_url": lst_mapid["tile_fetcher"].url_format,
-                "min": lst_min,
-                "max": lst_max,
-                "palette": LST_PALETTE,
-                "opacity": 0.6,
-            },
-            "ndvi": {
-                "tile_url": ndvi_mapid["tile_fetcher"].url_format,
-                "min": -0.3,
-                "max": 1,
-                "palette": NDVI_PALETTE,
-                "opacity": 0.45,
-            },
-            "land_cover": {
-                "tile_url": worldcover_mapid["tile_fetcher"].url_format,
-                "source": "ESA WorldCover 2021 (10m)",
-                "classes": WORLDCOVER_CLASSES,
-                "histogram": land_cover_histogram,
-                "opacity": 0.5,
-            },
-            "no2": {
-                **no2_layer,
-                "opacity": 0.55,
-                "source": "Sentinel-5P NO2 (COPERNICUS/S5P/OFFL/L3_NO2), tropospheric column, mol/m²",
-            },
-            "co": {
-                **co_layer,
-                "opacity": 0.55,
-                "source": "Sentinel-5P CO (COPERNICUS/S5P/OFFL/L3_CO), column density, mol/m²",
-            },
-            "ch4": {
-                **ch4_layer,
-                "opacity": 0.55,
-                "source": "Sentinel-5P CH4 (COPERNICUS/S5P/OFFL/L3_CH4), column mixing ratio, ppb",
-            },
-        },
+        "layers": layers,
     }
 
 
