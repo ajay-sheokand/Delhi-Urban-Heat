@@ -846,24 +846,15 @@ def build_ward_vulnerability_dataset(
         .getInfo()
         .get("features", [])
     )
-    if no2_rows:
-        print(f"NO2 zonal stats sample properties (first ward): {no2_rows[0].get('properties')}")
-    no2_by_ward = {}
-    for f in no2_rows:
-        props = f.get("properties", {})
-        ward_no = props.get("ward_no")
-        # Defensive lookup: reduceRegions' mean() output property should be the band name
-        # ("NO2", after the rename above), matching the LST/NDVI pattern - but fall back to
-        # scanning for whatever numeric value isn't one of the known input properties, in
-        # case EE names it differently for this particular composite image.
-        value = props.get("NO2")
-        if value is None:
-            known_keys = {"ward_no", "ward_name", "area_km2", "STADTBEZIR"}
-            for k, v in props.items():
-                if k not in known_keys and isinstance(v, (int, float)):
-                    value = v
-                    break
-        no2_by_ward[ward_no] = value
+    # reduceRegions() names a mean()-reduced SINGLE-band image's output property "mean" (the
+    # reducer's own name), not the band name - unlike the LST+NDVI case above, where reducing
+    # a multi-band image keeps each band's own name ("LST"/"NDVI"). The .rename("NO2") above
+    # doesn't change this. Confirmed empirically against the live service (a diagnostic print
+    # here initially showed no2_correlation_r landing as null / every ward's mean_no2 as None,
+    # because this was originally read via .get("NO2") - the same "check bit positions/reducer
+    # output names against the live service, don't assume" rigor as the QA_PIXEL mask fix and
+    # the sum()-vs-mean() note above.
+    no2_by_ward = {f["properties"].get("ward_no"): f["properties"].get("mean") for f in no2_rows}
 
     comp_cfg = city["complementary"]
     comp_by_ward = load_point_features_ward_aggregates(

@@ -271,6 +271,11 @@ Unlike the JJ-cluster/elderly-population layer above, this is **one shared imple
 
 **Ward-level NO₂ correlation** (`build_ward_vulnerability_dataset()`): NO₂ gets its own `reduceRegions()` call (`scale=1113`, matching Sentinel-5P's native ~1.1km pixel — NOT batched with the LST/NDVI call, which uses `scale=100`), producing `mean_no2` per ward, then `pearson_correlation()` (the same function already used for `jj_cluster_correlation_r`/`elderly_correlation_r`) against `vulnerability_score`, written to `validation.no2_correlation_r`. Only NO₂ gets a correlation number — CO and CH₄ stay map-only layers. NO₂ is checked because traffic/combustion sources plausibly link to the same heat/density signal the vulnerability score already captures; CH₄ (agriculture/waste sources) and CO (closely tracks NO₂'s own combustion sources) don't add a materially different hypothesis for a first pass, so a third and fourth near-duplicate correlation section wasn't built.
 
+> [!NOTE]
+> **Another real `reduceRegions()` output-naming quirk, caught the same way the `sum()`-vs-`mean()` one above was** — checked against the live service, not assumed. Reducing a *single-band* image with `Reducer.mean()` names the output property after the **reducer** (`"mean"`), not the band name — different from the LST+NDVI call above, where reducing a *multi-band* image keeps each band's own name (`"LST"`/`"NDVI"`). Renaming the NO₂ band beforehand (`.rename("NO2")`) doesn't change this. First deploy read this via `.get("NO2")` and silently got `None` for all 290/45 wards (`no2_correlation_r` landed as `null`, not an error — this was live for one workflow run before being caught and fixed) — worth knowing if you extend this pattern to another single-band pollutant.
+>
+> **What we actually found, checked against the live data at the time of writing:** Delhi's NO₂-vs-vulnerability-score correlation is weak and slightly negative (r ≈ -0.09), while Münster's is moderate and positive (r ≈ 0.41) — the same weak-Delhi/stronger-Münster pattern already seen with the JJ-cluster and elderly-population correlations above, not a coincidence specific to one variable. Exact values drift slightly run to run (LST/NDVI/NO₂ are all recomputed from a rolling window every 6 hours), so treat the pattern as the finding, not the specific digits.
+
 ---
 
 ## Known Limitations
