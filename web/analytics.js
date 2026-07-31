@@ -144,6 +144,7 @@ async function loadWardVulnerability() {
         .join("");
 
     renderComplementarySection(data);
+    renderPollutionSection(data);
 }
 
 function renderComplementarySection(data) {
@@ -203,6 +204,91 @@ function renderComplementarySection(data) {
         },
     });
 }
+
+// Unlike renderComplementarySection above (Delhi vs Münster, genuinely different data/text
+// per city), NO2-vs-vulnerability is the same hypothesis and same field names for both
+// cities, so this is one shared function/section, not a per-city ternary + two HTML divs.
+async function renderPollutionSection(wardData) {
+    const validation = wardData.validation || {};
+    const wards = wardData.wards || [];
+
+    const rEl = document.getElementById("no2-correlation-value");
+    if (rEl) {
+        const r = validation.no2_correlation_r;
+        rEl.textContent = r !== null && r !== undefined ? `r = ${r.toFixed(2)}` : "unavailable";
+    }
+
+    const points = wards
+        .filter((w) => w.vulnerability_score !== null && w.mean_no2 !== null && w.mean_no2 !== undefined)
+        .map((w) => ({ x: w.vulnerability_score, y: w.mean_no2 * 1e6, name: w.ward_name }));
+
+    const scatterCanvas = document.getElementById("no2-vulnerability-scatter");
+    if (scatterCanvas) {
+        new Chart(scatterCanvas, {
+            type: "scatter",
+            data: {
+                datasets: [
+                    {
+                        label: `${CITY.wardLabel}s`,
+                        data: points,
+                        backgroundColor: "#7c3aed",
+                        pointRadius: 4,
+                    },
+                ],
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => `${ctx.raw.name}: score ${ctx.raw.x.toFixed(1)}, NO₂ ${ctx.raw.y.toFixed(1)} µmol/m²`,
+                        },
+                    },
+                },
+                scales: {
+                    x: { title: { display: true, text: "Vulnerability score" } },
+                    y: { title: { display: true, text: "Mean NO₂ (µmol/m²)" } },
+                },
+            },
+        });
+    }
+
+    // District-level AQI is a separate dataset (weather.json, OpenWeather) from the ward-level
+    // NO2 satellite correlation above - its own fetch, independent try/except.
+    const aqiCanvas = document.getElementById("district-aqi-chart");
+    if (!aqiCanvas) return;
+    try {
+        const res = await fetch(cityDataPath("weather.json"), { cache: "no-store" });
+        const weather = await res.json();
+        const districts = (weather.districts || []).filter((d) => d.aqi !== null && d.aqi !== undefined);
+        new Chart(aqiCanvas, {
+            type: "bar",
+            data: {
+                labels: districts.map((d) => d.name),
+                datasets: [
+                    {
+                        label: "AQI (1=Good, 5=Very Poor)",
+                        data: districts.map((d) => d.aqi),
+                        backgroundColor: districts.map((d) => AQI_COLORS[d.aqi] || "#999"),
+                    },
+                ],
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${districts[ctx.dataIndex].aqi_label || "N/A"}` } },
+                },
+                scales: { y: { min: 1, max: 5, ticks: { stepSize: 1 } } },
+            },
+        });
+    } catch (err) {
+        console.error("Failed to load weather.json for AQI chart", err);
+    }
+}
+
+const AQI_COLORS = { 1: "#2e7d32", 2: "#8bc34a", 3: "#fdd835", 4: "#fb8c00", 5: "#c62828" };
 
 async function loadLongTermTrends(landCoverColors) {
     let timeseries = null;

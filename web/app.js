@@ -108,24 +108,38 @@ async function loadMapLayers() {
     document.getElementById("data-updated").textContent =
         `Map data last updated: ${data.generated_at_utc || "unknown"}`;
 
-    const { lst, ndvi, land_cover } = data.layers;
+    const { lst, ndvi, land_cover, no2, co, ch4 } = data.layers;
 
     addRasterLayer("lst", lst.tile_url, lst.opacity, true);
     addRasterLayer("ndvi", ndvi.tile_url, ndvi.opacity, false);
     addRasterLayer("landcover", land_cover.tile_url, land_cover.opacity, false);
+    addRasterLayer("no2", no2.tile_url, no2.opacity, false);
+    addRasterLayer("co", co.tile_url, co.opacity, false);
+    addRasterLayer("ch4", ch4.tile_url, ch4.opacity, false);
 
     rasterLayerCache = {
         lst: { tileUrl: lst.tile_url, opacity: lst.opacity },
         ndvi: { tileUrl: ndvi.tile_url, opacity: ndvi.opacity },
         landcover: { tileUrl: land_cover.tile_url, opacity: land_cover.opacity },
+        no2: { tileUrl: no2.tile_url, opacity: no2.opacity },
+        co: { tileUrl: co.tile_url, opacity: co.opacity },
+        ch4: { tileUrl: ch4.tile_url, opacity: ch4.opacity },
     };
 
     renderLstLegend(lst.min, lst.max, lst.palette);
     renderLandCoverLegend(land_cover.classes, land_cover.histogram);
+    // Sentinel-5P column densities are tiny numbers in raw mol/m² (NO2/CO) - scaled to
+    // µmol/m²/mmol/m² here purely for legend readability, same underlying data either way.
+    renderGradientLegend("no2", no2.min, no2.max, no2.palette, (v) => `${(v * 1e6).toFixed(0)} µmol/m²`);
+    renderGradientLegend("co", co.min, co.max, co.palette, (v) => `${(v * 1e3).toFixed(1)} mmol/m²`);
+    renderGradientLegend("ch4", ch4.min, ch4.max, ch4.palette, (v) => `${v.toFixed(0)} ppb`);
 
     wireToggle("toggle-lst", "lst-layer", "legend-lst");
     wireToggle("toggle-ndvi", "ndvi-layer", "legend-ndvi");
     wireToggle("toggle-landcover", "landcover-layer", "legend-landcover");
+    wireToggle("toggle-no2", "no2-layer", "legend-no2");
+    wireToggle("toggle-co", "co-layer", "legend-co");
+    wireToggle("toggle-ch4", "ch4-layer", "legend-ch4");
 }
 
 function addRasterLayer(key, tileUrl, opacity, visible) {
@@ -275,6 +289,9 @@ function buildRasterOverlayLayers() {
         { key: "lst", checkboxId: "toggle-lst" },
         { key: "ndvi", checkboxId: "toggle-ndvi" },
         { key: "landcover", checkboxId: "toggle-landcover" },
+        { key: "no2", checkboxId: "toggle-no2" },
+        { key: "co", checkboxId: "toggle-co" },
+        { key: "ch4", checkboxId: "toggle-ch4" },
     ];
     const layers = [];
     specs.forEach(({ key, checkboxId }) => {
@@ -366,7 +383,7 @@ function wirePhotorealisticToggle() {
 }
 
 function layoutLegends() {
-    const order = ["legend-lst", "legend-ndvi", "legend-landcover"];
+    const order = ["legend-lst", "legend-ndvi", "legend-landcover", "legend-no2", "legend-co", "legend-ch4"];
     let bottom = 240; // clears the bottom panel
     order.forEach((id) => {
         const el = document.getElementById(id);
@@ -386,6 +403,17 @@ function renderLstLegend(min, max, palette) {
     ndviGradient.style.background =
         "linear-gradient(to right, #8B0000,#DC143C,#FF4500,#FFD700,#FFFF00,#7FFF00,#00FF00,#006400)";
 
+    layoutLegends();
+}
+
+// Shared by the three Sentinel-5P pollutant legends (no2/co/ch4) - same gradient+scale
+// shape as renderLstLegend's LST half, just parameterized instead of copy-pasted 3x.
+function renderGradientLegend(idPrefix, min, max, palette, formatValue) {
+    const gradient = document.getElementById(`legend-${idPrefix}-gradient`);
+    if (!gradient) return;
+    gradient.style.background = `linear-gradient(to right, ${palette.join(",")})`;
+    const scale = document.getElementById(`legend-${idPrefix}-scale`);
+    if (scale) scale.innerHTML = `<span>${formatValue(min)}</span><span>${formatValue(max)}</span>`;
     layoutLegends();
 }
 
@@ -739,9 +767,15 @@ async function loadWeather() {
 
     const showMarkers = document.getElementById("toggle-weather").checked;
     const markers = districts.map((d) => {
+        // OpenWeather Air Pollution API (SILAM model, ground-level ug/m3) - a separate fetch
+        // from the temp/humidity/wind above, so it's independently optional per district.
+        const aqiLine =
+            d.aqi_label != null
+                ? `<br/>AQI: ${d.aqi_label}${d.pm2_5 != null ? ` (PM2.5: ${d.pm2_5.toFixed(1)} µg/m³)` : ""}`
+                : "";
         const popupHtml = `<strong>${d.name}</strong><br/>${d.temp_c.toFixed(1)}°C (feels ${d.feels_like_c.toFixed(
             1
-        )}°C)<br/>Humidity: ${d.humidity}%<br/>Wind: ${fmtWind(d.wind_speed_ms, d.wind_deg)}<br/>${d.heat_alert_label}`;
+        )}°C)<br/>Humidity: ${d.humidity}%<br/>Wind: ${fmtWind(d.wind_speed_ms, d.wind_deg)}<br/>${d.heat_alert_label}${aqiLine}`;
 
         const el = document.createElement("div");
         el.className = "weather-marker";

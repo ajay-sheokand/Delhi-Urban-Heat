@@ -149,6 +149,31 @@
             </div>
         </div>
 
+        <h2 class="section-title">Air Quality &amp; Pollution</h2>
+        <p class="muted">
+            Two independent data sources, two different physical quantities — worth keeping distinct rather than
+            treating them as interchangeable "pollution" numbers. The district AQI chart below comes from
+            OpenWeather's Air Pollution API: a modeled (SILAM), ground-level estimate in µg/m³, refreshed every 6
+            hours from the same district points the weather markers use. The ward-level scatter uses Sentinel-5P
+            (TROPOMI) satellite NO₂ — a <em>tropospheric column density</em> (µmol/m², the total NO₂ in a vertical
+            slice of atmosphere), not a ground-level concentration people breathe. NO₂ is checked against the
+            vulnerability score because traffic and combustion sources plausibly link to the same heat/density
+            signal the score already captures — CO and CH₄ are available as map layers but aren't run through a
+            second correlation here, since neither has as direct a hypothesised link to the existing score.
+            Citywide correlation between vulnerability score and mean ward NO₂:
+            <strong id="no2-correlation-value">—</strong>.
+        </p>
+        <div class="chart-grid">
+            <div class="chart-card">
+                <h3>Vulnerability Score vs Mean NO₂, by Ward</h3>
+                <canvas id="no2-vulnerability-scatter"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>Air Quality Index by District (OpenWeather, live snapshot)</h3>
+                <canvas id="district-aqi-chart"></canvas>
+            </div>
+        </div>
+
         <h2 class="section-title">Land Cover Statistics</h2>
         <div class="data-table-wrap">
             <table class="data-table" id="landcover-table">

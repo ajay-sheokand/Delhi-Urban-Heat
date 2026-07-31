@@ -316,6 +316,15 @@ def heat_alert_dwd(temp_c: float, feels_like_c: float = None) -> dict:
     return {"level": "normal", "label": "🌤️ Normal Temperature"}
 
 
+def aqi_label(aqi_index) -> str:
+    """Maps OpenWeather's Air Pollution API AQI index (1-5) to its documented
+    label. Real OpenWeather thresholds, not an invented scale - e.g. "Moderate"
+    (3) means NO2 100-200, PM2.5 30-55 ug/m3. Source:
+    https://openweathermap.org/api/air-pollution-index-levels"""
+    labels = {1: "Good", 2: "Fair", 3: "Moderate", 4: "Poor", 5: "Very Poor"}
+    return labels.get(aqi_index, "Unknown")
+
+
 def build_timeseries_dataset(region: ee.Geometry) -> dict:
     days_back = int(os.environ.get("PRECOMPUTE_DAYS", "730"))
     end_dt = datetime.utcnow().date()
@@ -395,17 +404,55 @@ WORLDCOVER_CLASSES = [
     {"id": 100, "color": "#FAE6A0", "label": "Moss/Lichen"},
 ]
 WORLDCOVER_NAME_BY_ID = {c["id"]: c["label"] for c in WORLDCOVER_CLASSES}
+# Sequential ramps for the three Sentinel-5P pollutant layers - distinct from each other and
+# from LST/NDVI so they're not visually confused with heat/vegetation on the map.
+NO2_PALETTE = ["#000000", "#3b0f70", "#8c2981", "#de4968", "#fe9f6d", "#fcfdbf"]
+CO_PALETTE = ["#000000", "#4d1a00", "#993300", "#e65c00", "#ff9933", "#ffe0b3"]
+CH4_PALETTE = ["#000000", "#1a3a6e", "#2e7fb8", "#5fc9c0", "#c4e86a", "#f4f469"]
 
 
 def build_map_layers_dataset(
     region: ee.Geometry,
     lst_image: ee.Image,
     ndvi_image: ee.Image,
+    no2_image: ee.Image,
+    co_image: ee.Image,
+    ch4_image: ee.Image,
     start_dt,
     end_dt,
 ) -> dict:
     lst_clipped = lst_image.clip(region)
     ndvi_clipped = ndvi_image.clip(region)
+
+    def pollutant_layer(image, band, fallback_min, fallback_max, palette, scale=1113):
+        """Shared clip/minmax/getMapId path for the three Sentinel-5P pollutant
+        layers below - same dynamic-range-with-fallback pattern as LST above,
+        just factored out since it's used three times. scale=1113 matches S5P's
+        native ~1.1km pixel (vs 100m for the Landsat-derived layers)."""
+        clipped = image.clip(region)
+        try:
+            stats = clipped.reduceRegion(
+                reducer=ee.Reducer.minMax(),
+                geometry=region,
+                scale=scale,
+                maxPixels=1e9,
+                bestEffort=True,
+                tileScale=4,
+            ).getInfo()
+            data_min = stats.get(f"{band}_min")
+            data_max = stats.get(f"{band}_max")
+            if data_min is None or data_max is None:
+                raise ValueError("empty reduceRegion result")
+        except Exception as exc:
+            print(f"{band} min/max calculation failed, using fallback range: {exc}")
+            data_min, data_max = fallback_min, fallback_max
+        mapid = clipped.getMapId({"min": data_min, "max": data_max, "palette": palette})
+        return {
+            "tile_url": mapid["tile_fetcher"].url_format,
+            "min": data_min,
+            "max": data_max,
+            "palette": palette,
+        }
 
     try:
         lst_stats = lst_clipped.reduceRegion(
@@ -449,6 +496,14 @@ def build_map_layers_dataset(
         print(f"Land cover histogram calculation failed: {exc}")
         land_cover_histogram = {}
 
+    no2_layer = pollutant_layer(
+        no2_image, "tropospheric_NO2_column_number_density", 0, 0.0002, NO2_PALETTE
+    )
+    co_layer = pollutant_layer(co_image, "CO_column_number_density", 0, 0.05, CO_PALETTE)
+    ch4_layer = pollutant_layer(
+        ch4_image, "CH4_column_volume_mixing_ratio_dry_air", 1800, 1950, CH4_PALETTE
+    )
+
     return {
         "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "coverage_start": start_dt.isoformat(),
@@ -474,6 +529,21 @@ def build_map_layers_dataset(
                 "classes": WORLDCOVER_CLASSES,
                 "histogram": land_cover_histogram,
                 "opacity": 0.5,
+            },
+            "no2": {
+                **no2_layer,
+                "opacity": 0.55,
+                "source": "Sentinel-5P NO2 (COPERNICUS/S5P/OFFL/L3_NO2), tropospheric column, mol/m²",
+            },
+            "co": {
+                **co_layer,
+                "opacity": 0.55,
+                "source": "Sentinel-5P CO (COPERNICUS/S5P/OFFL/L3_CO), column density, mol/m²",
+            },
+            "ch4": {
+                **ch4_layer,
+                "opacity": 0.55,
+                "source": "Sentinel-5P CH4 (COPERNICUS/S5P/OFFL/L3_CH4), column mixing ratio, ppb",
             },
         },
     }
@@ -725,6 +795,7 @@ def build_ward_vulnerability_dataset(
     ward_fc: ee.FeatureCollection,
     lst_image: ee.Image,
     ndvi_image: ee.Image,
+    no2_image: ee.Image,
     workspace: str,
     city: dict,
 ) -> dict:
@@ -767,6 +838,16 @@ def build_ward_vulnerability_dataset(
     # unlike mean() (used above), which keeps the band name ("LST"/"NDVI").
     pop_by_ward = {f["properties"].get("ward_no"): f["properties"].get("sum") for f in pop_rows}
 
+    # Separate reduceRegions call (not batched with LST/NDVI above) since Sentinel-5P's
+    # native ~1.1km pixel needs scale=1113, not the 100m scale LST/NDVI use.
+    no2_rows = (
+        no2_image.rename("NO2")
+        .reduceRegions(collection=ward_fc, reducer=ee.Reducer.mean(), scale=1113, tileScale=4)
+        .getInfo()
+        .get("features", [])
+    )
+    no2_by_ward = {f["properties"].get("ward_no"): f["properties"].get("NO2") for f in no2_rows}
+
     comp_cfg = city["complementary"]
     comp_by_ward = load_point_features_ward_aggregates(
         workspace, city["ward_geojson"], city["ward_no_col"], comp_cfg["geojson_path"], comp_cfg["value_field"]
@@ -788,6 +869,7 @@ def build_ward_vulnerability_dataset(
             "ward_no": ward_no,
             "mean_lst_c": props.get("LST"),
             "mean_ndvi": props.get("NDVI"),
+            "mean_no2": no2_by_ward.get(ward_no),
             "area_km2": area_km2,
             "population": population,
             "population_density_km2": population_density_km2,
@@ -829,6 +911,20 @@ def build_ward_vulnerability_dataset(
     wards_with_feature = sum(1 for w in wards if w[comp_cfg["count_key"]] > 0)
     total_features_matched = sum(w[comp_cfg["count_key"]] for w in wards)
 
+    # NO2 is checked against the vulnerability score for the same reason JJ-cluster/elderly
+    # density is above: traffic/combustion sources plausibly link to the heat+density signal
+    # already in the score. CO/CH4 stay map-only layers (no correlation computed) - see README.
+    no2_pairs = [
+        (w["vulnerability_score"], w["mean_no2"])
+        for w in wards
+        if w["vulnerability_score"] is not None and w["mean_no2"] is not None
+    ]
+    no2_correlation_r = (
+        pearson_correlation([p[0] for p in no2_pairs], [p[1] for p in no2_pairs])
+        if len(no2_pairs) > 10
+        else None
+    )
+
     return {
         "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "population_year": population_year,
@@ -854,6 +950,7 @@ def build_ward_vulnerability_dataset(
             comp_cfg["wards_key"]: wards_with_feature,
             comp_cfg["total_key"]: total_features_matched,
             "source_note": comp_cfg["source_note"],
+            "no2_correlation_r": no2_correlation_r,
         },
     }
 
@@ -1057,6 +1154,31 @@ def build_weather_dataset(city: dict) -> dict:
             feels_like_c = payload["main"]["feels_like"]
             alert = heat_alert_fn(temp_c, feels_like_c)
             wind = payload.get("wind", {})
+
+            # Separate API call (OpenWeather's Air Pollution endpoint, not part of the
+            # /weather response), so its own try/except keeps a pollution-fetch failure
+            # from dropping this district's temperature/wind/humidity data too.
+            aqi = aqi_lbl = pm2_5 = pm10 = no2_ugm3 = co_ugm3 = o3_ugm3 = so2_ugm3 = None
+            try:
+                aq_url = (
+                    "https://api.openweathermap.org/data/2.5/air_pollution"
+                    f"?lat={loc['lat']}&lon={loc['lon']}&appid={api_key}"
+                )
+                aq_response = requests.get(aq_url, timeout=15)
+                aq_response.raise_for_status()
+                aq_reading = aq_response.json()["list"][0]
+                aqi = aq_reading["main"]["aqi"]
+                aqi_lbl = aqi_label(aqi)
+                components = aq_reading.get("components", {})
+                pm2_5 = components.get("pm2_5")
+                pm10 = components.get("pm10")
+                no2_ugm3 = components.get("no2")
+                co_ugm3 = components.get("co")
+                o3_ugm3 = components.get("o3")
+                so2_ugm3 = components.get("so2")
+            except Exception as aq_exc:
+                print(f"Air pollution fetch failed for {loc['name']}: {aq_exc}")
+
             districts.append(
                 {
                     "name": loc["name"],
@@ -1072,6 +1194,17 @@ def build_weather_dataset(city: dict) -> dict:
                     "wind_deg": wind.get("deg"),
                     "heat_alert_level": alert["level"],
                     "heat_alert_label": alert["label"],
+                    # OpenWeather Air Pollution API (SILAM model, ground-level, ug/m3) -
+                    # a different physical quantity from the Sentinel-5P tropospheric
+                    # column layers below (mol/m2 / ppb), documented separately in README.
+                    "aqi": aqi,
+                    "aqi_label": aqi_lbl,
+                    "pm2_5": pm2_5,
+                    "pm10": pm10,
+                    "no2_ugm3": no2_ugm3,
+                    "co_ugm3": co_ugm3,
+                    "o3_ugm3": o3_ugm3,
+                    "so2_ugm3": so2_ugm3,
                 }
             )
         except Exception as exc:
@@ -1213,9 +1346,28 @@ def main() -> None:
         lst_image = composite_collection.select("LST").median()
         ndvi_image = composite_collection.select("NDVI").median()
 
+        # Sentinel-5P's daily coverage is sparser/cloudier than Landsat's, so this uses its
+        # own (wider) rolling window rather than reusing MAP_COMPOSITE_DAYS.
+        aq_days = int(os.environ.get("AIR_QUALITY_COMPOSITE_DAYS", "30"))
+        aq_end = datetime.utcnow().date()
+        aq_start = aq_end - timedelta(days=aq_days)
+
+        def s5p_composite(dataset_id: str, band: str) -> ee.Image:
+            return (
+                ee.ImageCollection(dataset_id)
+                .filterDate(aq_start.isoformat(), aq_end.isoformat())
+                .filterBounds(region)
+                .select(band)
+                .mean()
+            )
+
+        no2_image = s5p_composite("COPERNICUS/S5P/OFFL/L3_NO2", "tropospheric_NO2_column_number_density")
+        co_image = s5p_composite("COPERNICUS/S5P/OFFL/L3_CO", "CO_column_number_density")
+        ch4_image = s5p_composite("COPERNICUS/S5P/OFFL/L3_CH4", "CH4_column_volume_mixing_ratio_dry_air")
+
         try:
             map_layers_output = build_map_layers_dataset(
-                region, lst_image, ndvi_image, composite_start, composite_end
+                region, lst_image, ndvi_image, no2_image, co_image, ch4_image, composite_start, composite_end
             )
             with open(os.path.join(out_dir, "map_layers.json"), "w", encoding="utf-8") as f:
                 json.dump(map_layers_output, f, ensure_ascii=True)
@@ -1236,7 +1388,9 @@ def main() -> None:
 
         try:
             ward_fc = load_ward_features(workspace, city)
-            ward_output = build_ward_vulnerability_dataset(region, ward_fc, lst_image, ndvi_image, workspace, city)
+            ward_output = build_ward_vulnerability_dataset(
+                region, ward_fc, lst_image, ndvi_image, no2_image, workspace, city
+            )
             with open(os.path.join(out_dir, "ward_vulnerability.json"), "w", encoding="utf-8") as f:
                 json.dump(ward_output, f, ensure_ascii=True)
             print(f"[{slug}] Wrote ward_vulnerability.json for {len(ward_output['wards'])} wards")

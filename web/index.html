@@ -34,6 +34,9 @@
         <label><input type="checkbox" id="toggle-lst" checked /> 🌡️ Land Surface Temperature</label>
         <label><input type="checkbox" id="toggle-ndvi" /> 🌿 Vegetation Index (NDVI)</label>
         <label><input type="checkbox" id="toggle-landcover" /> 🌍 Land Cover</label>
+        <label><input type="checkbox" id="toggle-no2" /> 🏭 NO₂ (Sentinel-5P)</label>
+        <label><input type="checkbox" id="toggle-co" /> 🔥 CO (Sentinel-5P)</label>
+        <label><input type="checkbox" id="toggle-ch4" /> 🐄 CH₄ / Methane (Sentinel-5P)</label>
         <label><input type="checkbox" id="toggle-districts" checked /> 🗺️ <span id="toggle-districts-label">District Boundaries</span></label>
         <label><input type="checkbox" id="toggle-wards" /> 📍 <span id="toggle-wards-label">Ward Boundaries (290, click to inspect)</span></label>
         <label><input type="checkbox" id="toggle-jj-clusters" /> <span id="toggle-complementary-label">🏘️ Informal Settlements (685, click to inspect)</span></label>
@@ -58,6 +61,24 @@
     <div class="legend" id="legend-landcover" style="display:none;">
         <div class="legend-title">🌍 Land Cover Legend</div>
         <div class="legend-items" id="legend-landcover-items"></div>
+    </div>
+
+    <div class="legend" id="legend-no2" style="display:none;">
+        <div class="legend-title">🏭 NO₂ Legend (tropospheric column)</div>
+        <div class="legend-gradient" id="legend-no2-gradient"></div>
+        <div class="legend-scale" id="legend-no2-scale"></div>
+    </div>
+
+    <div class="legend" id="legend-co" style="display:none;">
+        <div class="legend-title">🔥 CO Legend (column density)</div>
+        <div class="legend-gradient" id="legend-co-gradient"></div>
+        <div class="legend-scale" id="legend-co-scale"></div>
+    </div>
+
+    <div class="legend" id="legend-ch4" style="display:none;">
+        <div class="legend-title">🐄 CH₄ Legend (column mixing ratio)</div>
+        <div class="legend-gradient" id="legend-ch4-gradient"></div>
+        <div class="legend-scale" id="legend-ch4-scale"></div>
     </div>
 
     <div class="panel panel-bottom" id="bottom-panel">
