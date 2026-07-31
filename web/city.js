@@ -37,7 +37,7 @@ const CITIES = {
             total: "total_jj_clusters_matched",
         },
         panelDescription:
-            "Satellite-derived land surface temperature, vegetation and land cover across Delhi's 11 districts. Map layers refresh automatically every 6 hours.",
+            "Satellite-derived heat and vegetation across Delhi's 11 districts, cross-referenced with who's actually vulnerable to it. Map layers refresh automatically every 6 hours.",
         heatAlertMethodology: "IMD-style (simplified proxy)",
     },
     muenster: {
@@ -73,7 +73,7 @@ const CITIES = {
             total: "total_elderly_grid_cells_matched",
         },
         panelDescription:
-            "Satellite-derived land surface temperature, vegetation and land cover across Münster's 9 Stadtbezirke. Map layers refresh automatically every 6 hours.",
+            "Satellite-derived heat and vegetation across Münster's 9 Stadtbezirke, cross-referenced with who's actually vulnerable to it. Map layers refresh automatically every 6 hours.",
         heatAlertMethodology: "DWD-style (simplified proxy)",
     },
 };

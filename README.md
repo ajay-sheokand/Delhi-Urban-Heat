@@ -4,7 +4,7 @@
 [![Live App](https://img.shields.io/badge/live%20app-ajay--sheokand.github.io-2ea44f)](https://ajay-sheokand.github.io/Delhi-Urban-Heat/)
 [![Python 3.11.8](https://img.shields.io/badge/python-3.11.8-blue)](runtime.txt)
 
-Static, precomputed dashboard for monitoring urban heat, now covering two cities — Delhi, India and Münster, Germany — with a one-click switcher between them. Started as a Delhi-only project; see [Multi-City Support](#multi-city-support) for how the second city was added and what does/doesn't carry over between them.
+Static, precomputed dashboard that cross-references satellite-measured urban heat with who's actually vulnerable to it — population density, informal settlements/elderly population, and air pollution, at ward level — rather than stopping at a temperature map. Covers two cities, Delhi, India and Münster, Germany, with a one-click switcher between them. Started as a Delhi-only project; see [Multi-City Support](#multi-city-support) for how the second city was added and what does/doesn't carry over between them. See the in-app **About** page (or [`web/about.html`](web/about.html)) for the short version of why it's built this way, with live correlation numbers; this README is the full technical reference.
 
 **Live app:** `https://ajay-sheokand.github.io/Delhi-Urban-Heat/` (add `?city=muenster` for Münster, or use the in-app switcher)
 
@@ -84,6 +84,9 @@ Main use case (both cities): map-based heat monitoring, historical analysis, war
 **Roadmap (`roadmap.html`)**
 - Real, computed evidence of cloud-cover data gaps in the Landsat record (expected vs actual scene cadence, largest gaps, scenes-per-month chart)
 - The case for a SAR-Optical reconstruction approach to fill those gaps (in development — see the file for status)
+
+**About (`about.html`)**
+- The short version of why this project cross-references heat with vulnerability instead of stopping at a temperature map, plus live (not hardcoded) correlation numbers pulled from the same `ward_vulnerability.json` the Analytics page uses — an explicit, honest "what we've actually found so far" and "what this is not" for a first-time visitor, ahead of this README's full technical detail
 
 All pages pull only from the precomputed JSON in `backend-data/` — nothing here triggers a live Earth Engine or third-party API call from the browser.
 
@@ -305,10 +308,11 @@ Unlike the JJ-cluster/elderly-population layer above, this is **one shared imple
 ## Project Structure
 
 - `web/`: static frontend (primary app)
-  - `city.js`: shared city config (paths, map view, labels per city) + the `?city=` switcher, included by all three pages
+  - `city.js`: shared city config (paths, map view, labels per city) + the `?city=` switcher, included by all four pages
   - `index.html` / `app.js`: MapLibre map + Chart.js time series + weather + district/ward/complementary-layer click-to-inspect
   - `analytics.html` / `analytics.js`: UHI, correlation, land-cover, long-term trend, ward-vulnerability, and complementary-layer analytics
   - `roadmap.html` / `roadmap.js`: cloud-gap evidence + SAR-Optical GNN roadmap narrative
+  - `about.html` / `about.js`: the project's mission/methodology page — why heat is cross-referenced with vulnerability, with live correlation numbers pulled from `ward_vulnerability.json` rather than hardcoded
   - `style.css`: shared styling for all pages
 - `app.py`: legacy Streamlit dashboard (secondary, not linked as the primary app, Delhi only)
 - `delhi_admin.geojson`: Delhi administrative boundaries (11 districts, `District` name property)
@@ -341,7 +345,7 @@ The static frontend and its data are published together to the `gh-pages` branch
    - Source: `Deploy from a branch`
    - Branch: `gh-pages`
    - Folder: `/ (root)`
-4. Visit `https://<your-github-username>.github.io/<your-repo-name>/` — this now serves `web/index.html` directly, defaulting to Delhi and reading `map_layers.json`, `district_analytics.json`, `weather.json`, `timeseries_scenes.json`, and `ward_vulnerability.json` from `delhi/` on the same site (plus the static `delhi_wards.geojson` / `delhi_jj_clusters.geojson`). Add `?city=muenster` (or use the in-app switcher) for Münster, reading the same filenames from `muenster/` plus `muenster_wards.geojson` / `muenster_elderly_population.geojson`. `analytics.html` and `roadmap.html` are linked from the map's top-left panel and preserve whichever city is currently selected.
+4. Visit `https://<your-github-username>.github.io/<your-repo-name>/` — this now serves `web/index.html` directly, defaulting to Delhi and reading `map_layers.json`, `district_analytics.json`, `weather.json`, `timeseries_scenes.json`, and `ward_vulnerability.json` from `delhi/` on the same site (plus the static `delhi_wards.geojson` / `delhi_jj_clusters.geojson`). Add `?city=muenster` (or use the in-app switcher) for Münster, reading the same filenames from `muenster/` plus `muenster_wards.geojson` / `muenster_elderly_population.geojson`. `analytics.html`, `roadmap.html`, and `about.html` are linked from the map's top-left panel and preserve whichever city is currently selected.
 
 The workflow re-runs every 6 hours, regenerating the precomputed JSON files for **both cities** (including fresh Earth Engine tile URLs and fresh weather readings) and republishing everything to `gh-pages`. Each precomputed file has its own try/except in the script, per city — if one fails (e.g. a transient EE or NASA POWER error), the previous version of that file is left in place rather than failing the whole run (the workflow's "Seed backend-data from previous publish" step is what makes that fallback real: it pulls the current live copy of each city's files before the script runs, so a skipped or failed dataset republishes unchanged instead of vanishing).
 
@@ -428,4 +432,4 @@ For educational and research use.
 
 ## Last Updated
 
-July 31, 2026 (Air quality & pollution added: OpenWeather Air Pollution API + Sentinel-5P NO₂/CO/CH₄)
+July 31, 2026 (CH₄ empty-layer fix, `about.html` mission/methodology page added, and site-wide copy reframed around cross-referencing heat with vulnerability rather than just mapping temperature)
