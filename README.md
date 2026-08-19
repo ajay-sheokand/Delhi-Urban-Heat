@@ -15,6 +15,7 @@ Static, precomputed dashboard that cross-references satellite-measured urban hea
 - [Scope](#scope)
 - [What The Static Frontend Shows](#what-the-static-frontend-shows)
 - [Key UI Behavior](#key-ui-behavior)
+- [Visual Design](#visual-design)
 - [Multi-City Support](#multi-city-support)
 - [Data Sources](#data-sources)
 - [Variables & Calculations](#variables--calculations)
@@ -94,6 +95,10 @@ All pages pull only from the precomputed JSON in `backend-data/` — nothing her
 
 - Map layers (LST/NDVI/land cover) and weather/heat alerts are all precomputed server-side and refresh automatically every 6 hours via GitHub Actions — there is no per-visit satellite or weather computation, and no API keys are ever exposed to the browser. The page loads instantly but reflects data as of the last refresh, not the live moment.
 - Legends update based on which layers are toggled on.
+
+## Visual Design
+
+The map page (`web/index.html`, `web/style.css`) is a persistent left sidebar (city switcher, stat row, grouped layer toggles, opacity sliders, legends, all in one scrollable column) with the map filling the rest of the viewport, not the earlier floating-card panels scattered over the map. Structurally this borrows ideas from GIS-explorer-style dashboards (a real toggle-switch component instead of plain checkboxes, a stat row up top, live opacity sliders, legends as inline rows rather than separate floating boxes) — but the visual identity is this project's own, not a copy: a warm ember accent (`--accent`, `#d9591a`) tied to the actual subject (heat monitoring), a warm off-white/charcoal neutral palette (not the cool gray-and-blue most engineering-tool dashboards default to), and Manrope (headings/stat numbers) paired with Inter (body/UI) rather than whatever pairing a reference happened to use. `analytics.html`/`roadmap.html`/`about.html` share the same CSS custom-property tokens (`:root` in `style.css`) for their nav bar, stat cards, chart cards, and narrative cards, so the whole site reads as one system despite those pages keeping their original content-page layout (they didn't need a sidebar restructure — only the map page's floating-panel-over-map layout called for one). Toggle switches are still real `<input type="checkbox">` elements underneath (wrapped in a `.switch` label), so none of the show/hide layer logic in `app.js` needed to change — only the visual layer changed, not the interaction model. Semantic colors (heat-alert severity red/orange/green, the LST/NDVI color ramps, Chart.js series colors) are deliberately untouched by this palette — those encode real data meaning and aren't part of the UI "brand," so restyling the chrome around them doesn't restyle the data itself. Below 860px the sidebar becomes a slide-in drawer (hamburger toggle, top-left) instead of a permanently docked column, since a phone-width screen can't fit both a full-height sidebar and a usable map at once.
 
 ## Multi-City Support
 
@@ -313,7 +318,7 @@ Unlike the JJ-cluster/elderly-population layer above, this is **one shared imple
   - `analytics.html` / `analytics.js`: UHI, correlation, land-cover, long-term trend, ward-vulnerability, and complementary-layer analytics
   - `roadmap.html` / `roadmap.js`: cloud-gap evidence + SAR-Optical GNN roadmap narrative
   - `about.html` / `about.js`: the project's mission/methodology page — why heat is cross-referenced with vulnerability, with live correlation numbers pulled from `ward_vulnerability.json` rather than hardcoded
-  - `style.css`: shared styling for all pages
+  - `style.css`: shared design tokens (`:root` custom properties — colors, type, radii) and styling for all pages, including the map page's sidebar layout — see [Visual Design](#visual-design)
 - `app.py`: legacy Streamlit dashboard (secondary, not linked as the primary app, Delhi only)
 - `delhi_admin.geojson`: Delhi administrative boundaries (11 districts, `District` name property)
 - `delhi_admin.kml`: Alternate boundary file
@@ -432,4 +437,4 @@ For educational and research use.
 
 ## Last Updated
 
-July 31, 2026 (CH₄ empty-layer fix, `about.html` mission/methodology page added, and site-wide copy reframed around cross-referencing heat with vulnerability rather than just mapping temperature)
+August 19, 2026 (map page rebuilt around a persistent sidebar with its own visual identity — see [Visual Design](#visual-design) — replacing the earlier floating-panel layout; `analytics.html`/`roadmap.html`/`about.html` re-themed via the same shared design tokens)

@@ -71,7 +71,7 @@ function showErrorBanner(message) {
 
 function applyCityChrome() {
     document.getElementById("page-title").textContent = `${CITY.displayName} Urban Heat Monitor`;
-    document.getElementById("page-heading").textContent = `🌡️ ${CITY.displayName} Urban Heat Monitor`;
+    document.getElementById("wordmark-city").textContent = CITY.displayName;
     document.getElementById("panel-description").textContent = CITY.panelDescription;
     document.getElementById("toggle-districts-label").textContent = `${CITY.districtLabel} Boundaries`;
     document.getElementById("toggle-wards-label").textContent = `${CITY.wardLabel} Boundaries (${CITY.wardCount}, click to inspect)`;
@@ -80,11 +80,25 @@ function applyCityChrome() {
         `${CITY.complementaryToggleIcon} ${CITY.complementaryLabel} (${complementaryCountLabel}click to inspect)`;
     renderCitySwitcher("city-switcher");
     wireCityAwareNavLinks();
+    applyStatRow();
+}
+
+// Same CITY config fields the layer-toggle labels above already use - just surfaced as
+// scannable stat chips at the top of the sidebar (structurally similar to a GIS-dashboard
+// stat row, but our own numbers: administrative geography, not building/road counts).
+function applyStatRow() {
+    document.getElementById("stat-districts").textContent = CITY.districtCount;
+    document.getElementById("stat-districts-unit").textContent = `${CITY.districtLabel}s`;
+    document.getElementById("stat-wards").textContent = CITY.wardCount;
+    document.getElementById("stat-wards-unit").textContent = `${CITY.wardLabel}s`;
+    document.getElementById("stat-complementary").textContent = CITY.complementaryCount ?? "—";
+    document.getElementById("stat-complementary-unit").textContent = CITY.complementaryLabel;
 }
 
 map.on("load", async () => {
     applyCityChrome();
     setupTabs();
+    setupSidebarToggle();
     wireBuildingsToggle();
     wirePhotorealisticToggle();
     document.getElementById("data-updated").textContent = "Loading map data…";
@@ -126,6 +140,10 @@ async function loadMapLayers() {
     wireToggle("toggle-lst", "lst-layer", "legend-lst");
     wireToggle("toggle-ndvi", "ndvi-layer", "legend-ndvi");
     wireToggle("toggle-landcover", "landcover-layer", "legend-landcover");
+
+    wireOpacitySlider("opacity-lst", "lst-layer", lst.opacity);
+    wireOpacitySlider("opacity-ndvi", "ndvi-layer", ndvi.opacity);
+    wireOpacitySlider("opacity-landcover", "landcover-layer", land_cover.opacity);
 
     // Sentinel-5P column densities are tiny numbers in raw mol/m² (NO2/CO) - scaled to
     // µmol/m²/mmol/m² here purely for legend readability, same underlying data either way.
@@ -182,10 +200,26 @@ function wireToggle(checkboxId, layerId, legendId) {
     checkbox.addEventListener("change", () => {
         map.setLayoutProperty(layerId, "visibility", checkbox.checked ? "visible" : "none");
         if (legend) legend.style.display = checkbox.checked ? "block" : "none";
-        layoutLegends();
         syncBoundaryOverlayLayers();
     });
     if (legend) legend.style.display = checkbox.checked ? "block" : "none";
+}
+
+// Initializes the slider to the actual backend-computed default opacity for that layer
+// (map_layers.json), not an arbitrary fixed value, so it doesn't visually mismatch the
+// layer's real starting appearance the first time a visitor sees it.
+function wireOpacitySlider(sliderId, layerId, initialOpacity) {
+    const slider = document.getElementById(sliderId);
+    const valueLabel = document.getElementById(`${sliderId}-value`);
+    if (!slider) return;
+    const initialPercent = Math.round(initialOpacity * 100);
+    slider.value = initialPercent;
+    if (valueLabel) valueLabel.textContent = `${initialPercent}%`;
+    slider.addEventListener("input", () => {
+        const percent = Number(slider.value);
+        map.setPaintProperty(layerId, "raster-opacity", percent / 100);
+        if (valueLabel) valueLabel.textContent = `${percent}%`;
+    });
 }
 
 function wireBuildingsToggle() {
@@ -401,16 +435,9 @@ function wirePhotorealisticToggle() {
     });
 }
 
-function layoutLegends() {
-    const order = ["legend-lst", "legend-ndvi", "legend-landcover", "legend-no2", "legend-co", "legend-ch4"];
-    let bottom = 240; // clears the bottom panel
-    order.forEach((id) => {
-        const el = document.getElementById(id);
-        if (!el || el.style.display === "none") return;
-        el.style.bottom = `${bottom}px`;
-        bottom += el.offsetHeight + 10;
-    });
-}
+// Legends live as normal in-flow rows in the sidebar now (not floating boxes stacked by
+// absolute position), so they lay themselves out via ordinary CSS flow - no JS positioning
+// math needed here any more.
 
 function renderLstLegend(min, max, palette) {
     const gradient = document.getElementById("legend-lst-gradient");
@@ -421,8 +448,6 @@ function renderLstLegend(min, max, palette) {
     const ndviGradient = document.getElementById("legend-ndvi-gradient");
     ndviGradient.style.background =
         "linear-gradient(to right, #8B0000,#DC143C,#FF4500,#FFD700,#FFFF00,#7FFF00,#00FF00,#006400)";
-
-    layoutLegends();
 }
 
 // Shared by the three Sentinel-5P pollutant legends (no2/co/ch4) - same gradient+scale
@@ -433,7 +458,6 @@ function renderGradientLegend(idPrefix, min, max, palette, formatValue) {
     gradient.style.background = `linear-gradient(to right, ${palette.join(",")})`;
     const scale = document.getElementById(`legend-${idPrefix}-scale`);
     if (scale) scale.innerHTML = `<span>${formatValue(min)}</span><span>${formatValue(max)}</span>`;
-    layoutLegends();
 }
 
 function renderLandCoverLegend(classes, histogram) {
@@ -448,8 +472,6 @@ function renderLandCoverLegend(classes, histogram) {
                 `<div class="legend-item"><span class="legend-swatch" style="background:${c.color};"></span><span>${c.label}</span></div>`
         )
         .join("");
-
-    layoutLegends();
 }
 
 function titleCase(str) {
@@ -1052,5 +1074,16 @@ function setupTabs() {
             document.getElementById(`tab-${btn.dataset.tab}`).style.display = "block";
             if (lstChart) lstChart.resize();
         });
+    });
+}
+
+// Sidebar is a persistent docked panel on desktop; below the CSS breakpoint (see
+// .sidebar-toggle-btn / body.sidebar-open in style.css) it slides in as an overlay instead,
+// since there isn't room for both a full-height sidebar and the map on a phone-width screen.
+function setupSidebarToggle() {
+    const btn = document.getElementById("sidebar-toggle-btn");
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+        document.body.classList.toggle("sidebar-open");
     });
 }

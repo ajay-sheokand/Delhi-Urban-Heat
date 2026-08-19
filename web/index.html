@@ -6,6 +6,9 @@
     <title id="page-title">Delhi Urban Heat Monitor</title>
     <meta name="description" content="Satellite-derived heat and vegetation across Delhi and Münster, cross-referenced with who's actually vulnerable to it — not just a temperature map." />
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%8C%A1%EF%B8%8F</text></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <script src="https://unpkg.com/maplibre-gl@3.x/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.x/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/deck.gl@9/dist.min.js"></script>
@@ -18,72 +21,182 @@
 
     <div id="map"></div>
 
-    <div class="panel panel-top-left">
-        <div id="city-switcher" class="city-switcher"></div>
-        <h1 id="page-heading">🌡️ Delhi Urban Heat Monitor</h1>
-        <p id="panel-description">Satellite-derived land surface temperature, vegetation and land cover across Delhi's 11 districts. Map layers refresh automatically every 6 hours.</p>
-        <div id="data-updated" class="muted"></div>
-        <div id="index-error-banner"></div>
-        <div class="panel-nav">
-            <a href="analytics.html" data-nav-page="analytics.html">📊 Full Analytics</a>
-            <a href="roadmap.html" data-nav-page="roadmap.html">🛰️ Roadmap</a>
-            <a href="about.html" data-nav-page="about.html">🧭 About</a>
+    <button class="sidebar-toggle-btn" id="sidebar-toggle-btn" aria-label="Toggle layer panel">☰</button>
+
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-scroll">
+            <div class="sidebar-header">
+                <div id="city-switcher" class="city-switcher"></div>
+                <div class="wordmark">
+                    <span class="wordmark-icon">🌡️</span>
+                    <h1 class="wordmark-text" id="page-heading"><span class="wordmark-city" id="wordmark-city">Delhi</span> Heat Monitor</h1>
+                </div>
+                <p class="sidebar-tagline" id="panel-description">Satellite-derived land surface temperature, vegetation and land cover across Delhi's 11 districts. Map layers refresh automatically every 6 hours.</p>
+            </div>
+
+            <div class="stat-row" id="stat-row">
+                <div class="stat-chip">
+                    <span class="stat-chip-value" id="stat-districts">11</span>
+                    <span class="stat-chip-label" id="stat-districts-unit">Districts</span>
+                </div>
+                <div class="stat-chip">
+                    <span class="stat-chip-value" id="stat-wards">290</span>
+                    <span class="stat-chip-label" id="stat-wards-unit">Wards</span>
+                </div>
+                <div class="stat-chip">
+                    <span class="stat-chip-value" id="stat-complementary">685</span>
+                    <span class="stat-chip-label" id="stat-complementary-unit">Informal Settlements</span>
+                </div>
+            </div>
+
+            <div class="layer-section">
+                <div class="layer-section-title">Satellite Data</div>
+                <label class="layer-row">
+                    <span class="layer-row-icon">🌡️</span>
+                    <span class="layer-row-label">Land Surface Temperature</span>
+                    <span class="switch"><input type="checkbox" id="toggle-lst" checked /><span class="switch-track"></span></span>
+                </label>
+                <label class="layer-row">
+                    <span class="layer-row-icon">🌿</span>
+                    <span class="layer-row-label">Vegetation Index (NDVI)</span>
+                    <span class="switch"><input type="checkbox" id="toggle-ndvi" /><span class="switch-track"></span></span>
+                </label>
+                <label class="layer-row">
+                    <span class="layer-row-icon">🌍</span>
+                    <span class="layer-row-label">Land Cover</span>
+                    <span class="switch"><input type="checkbox" id="toggle-landcover" /><span class="switch-track"></span></span>
+                </label>
+                <label class="layer-row">
+                    <span class="layer-row-icon">🏭</span>
+                    <span class="layer-row-label">NO₂ (Sentinel-5P)</span>
+                    <span class="switch"><input type="checkbox" id="toggle-no2" /><span class="switch-track"></span></span>
+                </label>
+                <label class="layer-row">
+                    <span class="layer-row-icon">🔥</span>
+                    <span class="layer-row-label">CO (Sentinel-5P)</span>
+                    <span class="switch"><input type="checkbox" id="toggle-co" /><span class="switch-track"></span></span>
+                </label>
+                <label class="layer-row">
+                    <span class="layer-row-icon">🐄</span>
+                    <span class="layer-row-label">CH₄ / Methane (Sentinel-5P)</span>
+                    <span class="switch"><input type="checkbox" id="toggle-ch4" /><span class="switch-track"></span></span>
+                </label>
+            </div>
+
+            <div class="layer-section">
+                <div class="layer-section-title">Boundaries</div>
+                <label class="layer-row">
+                    <span class="layer-row-icon">🗺️</span>
+                    <span class="layer-row-label" id="toggle-districts-label">District Boundaries</span>
+                    <span class="switch"><input type="checkbox" id="toggle-districts" checked /><span class="switch-track"></span></span>
+                </label>
+                <label class="layer-row">
+                    <span class="layer-row-icon">📍</span>
+                    <span class="layer-row-label" id="toggle-wards-label">Ward Boundaries (290, click to inspect)</span>
+                    <span class="switch"><input type="checkbox" id="toggle-wards" /><span class="switch-track"></span></span>
+                </label>
+                <label class="layer-row">
+                    <span class="layer-row-icon">🏘️</span>
+                    <span class="layer-row-label" id="toggle-complementary-label">Informal Settlements (685, click to inspect)</span>
+                    <span class="switch"><input type="checkbox" id="toggle-jj-clusters" /><span class="switch-track"></span></span>
+                </label>
+            </div>
+
+            <div class="layer-section">
+                <div class="layer-section-title">Live &amp; Interactive</div>
+                <label class="layer-row">
+                    <span class="layer-row-icon">🌤️</span>
+                    <span class="layer-row-label">Weather Markers</span>
+                    <span class="switch"><input type="checkbox" id="toggle-weather" checked /><span class="switch-track"></span></span>
+                </label>
+                <label class="layer-row">
+                    <span class="layer-row-icon">🌬️</span>
+                    <span class="layer-row-label">Wind Field (animated, interpolated)</span>
+                    <span class="switch"><input type="checkbox" id="toggle-wind-field" /><span class="switch-track"></span></span>
+                </label>
+                <label class="layer-row">
+                    <span class="layer-row-icon">🏢</span>
+                    <span class="layer-row-label">3D Buildings (zoom in to see)</span>
+                    <span class="switch"><input type="checkbox" id="toggle-3d-buildings" /><span class="switch-track"></span></span>
+                </label>
+                <label class="layer-row">
+                    <span class="layer-row-icon">📷</span>
+                    <span class="layer-row-label">Photorealistic 3D (Google, beta — replaces map view)</span>
+                    <span class="switch"><input type="checkbox" id="toggle-photorealistic-3d" /><span class="switch-track"></span></span>
+                </label>
+            </div>
+
+            <div class="layer-section">
+                <div class="layer-section-title">Opacity</div>
+                <div class="opacity-row">
+                    <span class="opacity-row-label">LST</span>
+                    <input type="range" id="opacity-lst" min="0" max="100" value="80" />
+                    <span class="opacity-row-value" id="opacity-lst-value">80%</span>
+                </div>
+                <div class="opacity-row">
+                    <span class="opacity-row-label">NDVI</span>
+                    <input type="range" id="opacity-ndvi" min="0" max="100" value="80" />
+                    <span class="opacity-row-value" id="opacity-ndvi-value">80%</span>
+                </div>
+                <div class="opacity-row">
+                    <span class="opacity-row-label">Land Cover</span>
+                    <input type="range" id="opacity-landcover" min="0" max="100" value="80" />
+                    <span class="opacity-row-value" id="opacity-landcover-value">80%</span>
+                </div>
+            </div>
+
+            <div class="layer-section" id="legend-section">
+                <div class="layer-section-title">Legend</div>
+
+                <div class="legend" id="legend-lst">
+                    <div class="legend-title">🌡️ LST (°C)</div>
+                    <div class="legend-gradient" id="legend-lst-gradient"></div>
+                    <div class="legend-scale" id="legend-lst-scale"></div>
+                </div>
+
+                <div class="legend" id="legend-ndvi" style="display:none;">
+                    <div class="legend-title">🌿 NDVI</div>
+                    <div class="legend-gradient" id="legend-ndvi-gradient"></div>
+                    <div class="legend-scale"><span>-0.3</span><span>1.0</span></div>
+                </div>
+
+                <div class="legend" id="legend-landcover" style="display:none;">
+                    <div class="legend-title">🌍 Land Cover</div>
+                    <div class="legend-items" id="legend-landcover-items"></div>
+                </div>
+
+                <div class="legend" id="legend-no2" style="display:none;">
+                    <div class="legend-title">🏭 NO₂ (tropospheric column)</div>
+                    <div class="legend-gradient" id="legend-no2-gradient"></div>
+                    <div class="legend-scale" id="legend-no2-scale"></div>
+                </div>
+
+                <div class="legend" id="legend-co" style="display:none;">
+                    <div class="legend-title">🔥 CO (column density)</div>
+                    <div class="legend-gradient" id="legend-co-gradient"></div>
+                    <div class="legend-scale" id="legend-co-scale"></div>
+                </div>
+
+                <div class="legend" id="legend-ch4" style="display:none;">
+                    <div class="legend-title">🐄 CH₄ (column mixing ratio)</div>
+                    <div class="legend-gradient" id="legend-ch4-gradient"></div>
+                    <div class="legend-scale" id="legend-ch4-scale"></div>
+                </div>
+            </div>
         </div>
-    </div>
 
-    <div class="panel panel-top-right" id="layer-panel">
-        <h2>Layers</h2>
-        <label><input type="checkbox" id="toggle-lst" checked /> 🌡️ Land Surface Temperature</label>
-        <label><input type="checkbox" id="toggle-ndvi" /> 🌿 Vegetation Index (NDVI)</label>
-        <label><input type="checkbox" id="toggle-landcover" /> 🌍 Land Cover</label>
-        <label><input type="checkbox" id="toggle-no2" /> 🏭 NO₂ (Sentinel-5P)</label>
-        <label><input type="checkbox" id="toggle-co" /> 🔥 CO (Sentinel-5P)</label>
-        <label><input type="checkbox" id="toggle-ch4" /> 🐄 CH₄ / Methane (Sentinel-5P)</label>
-        <label><input type="checkbox" id="toggle-districts" checked /> 🗺️ <span id="toggle-districts-label">District Boundaries</span></label>
-        <label><input type="checkbox" id="toggle-wards" /> 📍 <span id="toggle-wards-label">Ward Boundaries (290, click to inspect)</span></label>
-        <label><input type="checkbox" id="toggle-jj-clusters" /> <span id="toggle-complementary-label">🏘️ Informal Settlements (685, click to inspect)</span></label>
-        <label><input type="checkbox" id="toggle-weather" checked /> 🌤️ Weather Markers</label>
-        <label><input type="checkbox" id="toggle-wind-field" /> 🌬️ Wind Field (animated, interpolated)</label>
-        <label><input type="checkbox" id="toggle-3d-buildings" /> 🏢 3D Buildings (zoom in to see)</label>
-        <label><input type="checkbox" id="toggle-photorealistic-3d" /> 📷 Photorealistic 3D (Google, beta — replaces map view)</label>
-    </div>
+        <div class="sidebar-footer">
+            <div id="data-updated" class="muted"></div>
+            <div id="index-error-banner"></div>
+            <nav class="sidebar-nav">
+                <a href="analytics.html" data-nav-page="analytics.html">Analytics</a>
+                <a href="roadmap.html" data-nav-page="roadmap.html">Roadmap</a>
+                <a href="about.html" data-nav-page="about.html">About</a>
+            </nav>
+        </div>
+    </aside>
 
-    <div class="legend" id="legend-lst">
-        <div class="legend-title">🌡️ LST Legend (°C)</div>
-        <div class="legend-gradient" id="legend-lst-gradient"></div>
-        <div class="legend-scale" id="legend-lst-scale"></div>
-    </div>
-
-    <div class="legend" id="legend-ndvi" style="display:none;">
-        <div class="legend-title">🌿 NDVI Legend</div>
-        <div class="legend-gradient" id="legend-ndvi-gradient"></div>
-        <div class="legend-scale"><span>-0.3</span><span>1.0</span></div>
-    </div>
-
-    <div class="legend" id="legend-landcover" style="display:none;">
-        <div class="legend-title">🌍 Land Cover Legend</div>
-        <div class="legend-items" id="legend-landcover-items"></div>
-    </div>
-
-    <div class="legend" id="legend-no2" style="display:none;">
-        <div class="legend-title">🏭 NO₂ Legend (tropospheric column)</div>
-        <div class="legend-gradient" id="legend-no2-gradient"></div>
-        <div class="legend-scale" id="legend-no2-scale"></div>
-    </div>
-
-    <div class="legend" id="legend-co" style="display:none;">
-        <div class="legend-title">🔥 CO Legend (column density)</div>
-        <div class="legend-gradient" id="legend-co-gradient"></div>
-        <div class="legend-scale" id="legend-co-scale"></div>
-    </div>
-
-    <div class="legend" id="legend-ch4" style="display:none;">
-        <div class="legend-title">🐄 CH₄ Legend (column mixing ratio)</div>
-        <div class="legend-gradient" id="legend-ch4-gradient"></div>
-        <div class="legend-scale" id="legend-ch4-scale"></div>
-    </div>
-
-    <div class="panel panel-bottom" id="bottom-panel">
+    <div class="panel-bottom" id="bottom-panel">
         <div class="bottom-tabs">
             <button class="tab-btn active" data-tab="chart">📈 Time Series (LST)</button>
             <button class="tab-btn" data-tab="alerts">🔥 Heat Alerts</button>
