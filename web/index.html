@@ -47,6 +47,10 @@
                     <span class="stat-chip-value" id="stat-complementary">685</span>
                     <span class="stat-chip-label" id="stat-complementary-unit">Informal Settlements</span>
                 </div>
+                <div class="stat-chip" id="stat-buildings-chip" style="display:none;">
+                    <span class="stat-chip-value" id="stat-buildings">—</span>
+                    <span class="stat-chip-label">Buildings Detected</span>
+                </div>
             </div>
 
             <div class="layer-section">
@@ -80,6 +84,16 @@
                     <span class="layer-row-icon">🐄</span>
                     <span class="layer-row-label">CH₄ / Methane (Sentinel-5P)</span>
                     <span class="switch"><input type="checkbox" id="toggle-ch4" /><span class="switch-track"></span></span>
+                </label>
+                <label class="layer-row">
+                    <span class="layer-row-icon">🌊</span>
+                    <span class="layer-row-label">Flood Risk (elevation proxy)</span>
+                    <span class="switch"><input type="checkbox" id="toggle-flood-risk" /><span class="switch-track"></span></span>
+                </label>
+                <label class="layer-row" id="row-buildings" style="display:none;">
+                    <span class="layer-row-icon">🏗️</span>
+                    <span class="layer-row-label" id="toggle-buildings-label">Building Footprints</span>
+                    <span class="switch"><input type="checkbox" id="toggle-buildings" /><span class="switch-track"></span></span>
                 </label>
             </div>
 
@@ -181,6 +195,17 @@
                     <div class="legend-title">🐄 CH₄ (column mixing ratio)</div>
                     <div class="legend-gradient" id="legend-ch4-gradient"></div>
                     <div class="legend-scale" id="legend-ch4-scale"></div>
+                </div>
+
+                <div class="legend" id="legend-flood-risk" style="display:none;">
+                    <div class="legend-title">🌊 Flood Risk (elevation proxy)</div>
+                    <div class="legend-items" id="legend-flood-risk-items"></div>
+                    <div class="legend-note" id="legend-flood-risk-note"></div>
+                </div>
+
+                <div class="legend" id="legend-buildings" style="display:none;">
+                    <div class="legend-title">🏗️ Building Footprints</div>
+                    <div class="legend-note" id="legend-buildings-note"></div>
                 </div>
             </div>
         </div>

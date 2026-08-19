@@ -164,7 +164,7 @@ a { color: inherit; }
 
 .stat-row {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
     gap: 8px;
     margin-bottom: 18px;
 }
@@ -370,6 +370,13 @@ a { color: inherit; }
     height: 11px;
     border-radius: 3px;
     flex-shrink: 0;
+}
+
+.legend-note {
+    color: var(--ink-faint);
+    font-size: 10px;
+    line-height: 1.4;
+    margin-top: 6px;
 }
 
 /* ---- Sidebar footer ---- */

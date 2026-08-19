@@ -122,7 +122,7 @@ async function loadMapLayers() {
     document.getElementById("data-updated").textContent =
         `Map data last updated: ${data.generated_at_utc || "unknown"}`;
 
-    const { lst, ndvi, land_cover, no2, co, ch4 } = data.layers;
+    const { lst, ndvi, land_cover, no2, co, ch4, flood_risk } = data.layers;
 
     addRasterLayer("lst", lst.tile_url, lst.opacity, true);
     addRasterLayer("ndvi", ndvi.tile_url, ndvi.opacity, false);
@@ -155,6 +155,81 @@ async function loadMapLayers() {
     wirePollutantLayer("no2", no2, "toggle-no2", "legend-no2", (v) => `${(v * 1e6).toFixed(0)} µmol/m²`);
     wirePollutantLayer("co", co, "toggle-co", "legend-co", (v) => `${(v * 1e3).toFixed(1)} mmol/m²`);
     wirePollutantLayer("ch4", ch4, "toggle-ch4", "legend-ch4", (v) => `${v.toFixed(0)} ppb`);
+
+    wireFloodRiskLayer(flood_risk);
+    loadBuildingStats();
+}
+
+// SRTM-elevation relative-risk proxy (see build_flood_risk_layer() in the precompute
+// script) - same "layer can be legitimately absent, disable rather than fake it"
+// handling as wirePollutantLayer, plus the classes/honesty_note it carries so the
+// legend states plainly that this is not an official flood-hazard map.
+function wireFloodRiskLayer(layerData) {
+    const checkbox = document.getElementById("toggle-flood-risk");
+    if (!layerData) {
+        if (checkbox) {
+            checkbox.checked = false;
+            checkbox.disabled = true;
+            checkbox.title = "Flood risk layer unavailable for this run.";
+        }
+        const legend = document.getElementById("legend-flood-risk");
+        if (legend) legend.style.display = "none";
+        return;
+    }
+    addRasterLayer("flood-risk", layerData.tile_url, layerData.opacity, false);
+    rasterLayerCache["flood-risk"] = { tileUrl: layerData.tile_url, opacity: layerData.opacity };
+
+    document.getElementById("legend-flood-risk-items").innerHTML = layerData.classes
+        .map(
+            (c) =>
+                `<div class="legend-item"><span class="legend-swatch" style="background:${c.color};"></span><span>${c.label}</span></div>`
+        )
+        .join("");
+    document.getElementById("legend-flood-risk-note").textContent = layerData.honesty_note || "";
+
+    wireToggle("toggle-flood-risk", "flood-risk-layer", "legend-flood-risk");
+}
+
+// Real building count from Google Open Buildings v3 (see build_building_stats_dataset())
+// - Delhi-only, since that dataset has zero coverage over Europe. building_stats.json only
+// exists for cities with has_building_data set, and even there it's only (re)computed on
+// should_run_weekly_job()'s cadence (a ~2.5-minute FeatureCollection.size() over the whole
+// city, not worth re-running every 6 hours for a static satellite-derived dataset) - a 404
+// here just means "not applicable to this city" or "not computed yet", not an error.
+async function loadBuildingStats() {
+    let data;
+    try {
+        const res = await fetch(cityDataPath("building_stats.json"), { cache: "no-store" });
+        if (!res.ok) return;
+        data = await res.json();
+    } catch (err) {
+        return;
+    }
+
+    document.getElementById("stat-buildings-chip").style.display = "";
+    const statEl = document.getElementById("stat-buildings");
+    statEl.textContent = formatCompactCount(data.building_count);
+    statEl.title = `${data.building_count.toLocaleString()} buildings detected`;
+
+    const row = document.getElementById("row-buildings");
+    row.style.display = "";
+    document.getElementById("toggle-buildings-label").textContent =
+        `Building Footprints (${formatCompactCount(data.building_count)} detected)`;
+
+    addRasterLayer("buildings", data.footprint_tile_url, 0.55, false);
+    rasterLayerCache["buildings"] = { tileUrl: data.footprint_tile_url, opacity: 0.55 };
+
+    document.getElementById("legend-buildings-note").textContent =
+        `${data.building_count.toLocaleString()} buildings across ${data.area_km2.toFixed(0)} km² ` +
+        `(~${Math.round(data.density_per_km2).toLocaleString()}/km²). ${data.honesty_note}`;
+
+    wireToggle("toggle-buildings", "buildings-layer", "legend-buildings");
+}
+
+function formatCompactCount(n) {
+    if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+    if (n >= 1e3) return `${(n / 1e3).toFixed(0)}K`;
+    return String(n);
 }
 
 function wirePollutantLayer(key, layerData, checkboxId, legendId, formatValue) {
@@ -345,6 +420,8 @@ function buildRasterOverlayLayers() {
         { key: "no2", checkboxId: "toggle-no2" },
         { key: "co", checkboxId: "toggle-co" },
         { key: "ch4", checkboxId: "toggle-ch4" },
+        { key: "flood-risk", checkboxId: "toggle-flood-risk" },
+        { key: "buildings", checkboxId: "toggle-buildings" },
     ];
     const layers = [];
     specs.forEach(({ key, checkboxId }) => {

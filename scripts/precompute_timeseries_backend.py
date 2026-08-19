@@ -409,6 +409,107 @@ WORLDCOVER_NAME_BY_ID = {c["id"]: c["label"] for c in WORLDCOVER_CLASSES}
 NO2_PALETTE = ["#000000", "#3b0f70", "#8c2981", "#de4968", "#fe9f6d", "#fcfdbf"]
 CO_PALETTE = ["#000000", "#4d1a00", "#993300", "#e65c00", "#ff9933", "#ffe0b3"]
 CH4_PALETTE = ["#000000", "#1a3a6e", "#2e7fb8", "#5fc9c0", "#c4e86a", "#f4f469"]
+# 5-class relative elevation-risk ramp (light = lowest, dark navy = highest within-city
+# percentile). Deliberately blue (the conventional cartographic color for water/flood
+# risk) rather than the site's ember UI accent - this is a map layer, not chrome.
+FLOOD_RISK_PALETTE = ["#eaf4ff", "#a8d1f0", "#5fa8dc", "#2c6fad", "#123d6b"]
+FLOOD_RISK_CLASSES = [
+    {"id": 0, "color": "#123d6b", "label": "Highest (bottom 10% elevation)"},
+    {"id": 1, "color": "#2c6fad", "label": "Elevated (10th-30th percentile)"},
+    {"id": 2, "color": "#5fa8dc", "label": "Moderate (30th-70th percentile)"},
+    {"id": 3, "color": "#a8d1f0", "label": "Lower (70th-90th percentile)"},
+    {"id": 4, "color": "#eaf4ff", "label": "Lowest (top 10% elevation)"},
+]
+
+
+def build_flood_risk_layer(region: ee.Geometry) -> dict:
+    """SRTM-elevation relative-risk proxy: buckets each pixel by where its elevation
+    falls in THIS city's own elevation distribution (percentiles computed over the
+    real city boundary), not an absolute flood-hazard threshold. Honesty note lives
+    in the returned dict itself (method + real percentile breakpoints) so the
+    frontend can render the same caveat it shows for every other proxy metric -
+    elevation alone does not model drainage, rainfall intensity, river discharge,
+    or storm-water infrastructure, so this is NOT an official flood-hazard map."""
+    srtm = ee.Image("USGS/SRTMGL1_003").clip(region)
+    stats = srtm.reduceRegion(
+        reducer=ee.Reducer.percentile([10, 30, 50, 70, 90]).combine(ee.Reducer.minMax(), sharedInputs=True),
+        geometry=region,
+        scale=30,
+        maxPixels=1e9,
+        bestEffort=True,
+        tileScale=4,
+    ).getInfo()
+    p10 = stats["elevation_p10"]
+    p30 = stats["elevation_p30"]
+    p50 = stats["elevation_p50"]
+    p70 = stats["elevation_p70"]
+    p90 = stats["elevation_p90"]
+    elev_min = stats["elevation_min"]
+    elev_max = stats["elevation_max"]
+
+    classified = (
+        ee.Image(4)
+        .where(srtm.lte(p90), 3)
+        .where(srtm.lte(p70), 2)
+        .where(srtm.lte(p30), 1)
+        .where(srtm.lte(p10), 0)
+        .clip(region)
+    )
+    mapid = classified.getMapId({"min": 0, "max": 4, "palette": FLOOD_RISK_PALETTE})
+
+    return {
+        "tile_url": mapid["tile_fetcher"].url_format,
+        "opacity": 0.65,
+        "method": "srtm_elevation_percentile_proxy",
+        "source": "USGS SRTM 30m DEM (USGS/SRTMGL1_003), classified by this city's own elevation percentiles",
+        "classes": FLOOD_RISK_CLASSES,
+        "elevation_stats": {
+            "min_m": elev_min, "max_m": elev_max,
+            "p10_m": p10, "p30_m": p30, "p50_m": p50, "p70_m": p70, "p90_m": p90,
+        },
+        "honesty_note": (
+            "Relative elevation-risk proxy only, not an official flood-hazard map. "
+            "Buckets are this city's own elevation percentiles (lower ground = "
+            "relatively higher risk within the same city), computed from real SRTM "
+            "30m data. It does not model rainfall intensity, drainage capacity, "
+            "storm-water infrastructure, or river discharge - all of which matter "
+            "at least as much as elevation for actual flood risk."
+        ),
+    }
+
+
+def build_building_stats_dataset(region: ee.Geometry) -> dict:
+    """Real building count from Google Open Buildings v3 (AI-detected footprints from
+    satellite imagery), not an estimate. FeatureCollection.size() over a full city is
+    expensive (~2.5 min for Delhi's 1,487 km^2, confirmed by direct timing) - fine for
+    a job that only runs on should_run_weekly_job()'s cadence, not every 6-hourly run,
+    since the underlying dataset is a static satellite-derived snapshot that doesn't
+    change hour to hour anyway.
+    Open Buildings v3's coverage is the Global South (Africa/South/Southeast Asia/Latin
+    America) - it has zero features over Europe, confirmed directly, which is why this
+    is only wired up for Delhi in get_city_configs(), not Münster."""
+    buildings = ee.FeatureCollection("GOOGLE/Research/open-buildings/v3/polygons").filterBounds(region)
+    count = buildings.size().getInfo()
+    area_km2 = region.area(1).divide(1e6).getInfo()
+
+    footprint_image = ee.Image().paint(buildings, 1).clip(region)
+    mapid = footprint_image.getMapId({"palette": ["#123d6b"]})
+
+    return {
+        "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "building_count": count,
+        "area_km2": area_km2,
+        "density_per_km2": count / area_km2 if area_km2 else None,
+        "footprint_tile_url": mapid["tile_fetcher"].url_format,
+        "source": "Google Open Buildings v3 (GOOGLE/Research/open-buildings/v3/polygons), AI-detected building footprints from satellite imagery",
+        "honesty_note": (
+            "Real count from Google's satellite-derived building-detection model, not "
+            "an official census or municipal building registry. Small/very low-confidence "
+            "structures may be missed, and detections are not manually verified. Open "
+            "Buildings v3's coverage is the Global South - it has no data over Europe, "
+            "which is why this metric is Delhi-only on this site."
+        ),
+    }
 
 
 def build_map_layers_dataset(
@@ -524,6 +625,12 @@ def build_map_layers_dataset(
         print(f"Land cover histogram calculation failed: {exc}")
         land_cover_histogram = {}
 
+    try:
+        flood_risk_layer = build_flood_risk_layer(region)
+    except Exception as exc:
+        print(f"Flood risk layer calculation failed: {exc}")
+        flood_risk_layer = None
+
     no2_layer = pollutant_layer(
         no2_image, "tropospheric_NO2_column_number_density", "COPERNICUS/S5P/OFFL/L3_NO2", NO2_PALETTE
     )
@@ -555,6 +662,9 @@ def build_map_layers_dataset(
             "opacity": 0.5,
         },
     }
+    if flood_risk_layer is not None:
+        layers["flood_risk"] = flood_risk_layer
+
     # NO2/CO/CH4 can come back None (see pollutant_layer) when a pollutant has no valid
     # retrievals even after the wider retry composite - omit the key entirely rather than
     # publish a layer with no real data behind it.
@@ -1281,6 +1391,9 @@ def get_city_configs(workspace: str) -> list:
         "ward_name_title_case": True,
         "worldpop_country_code": "IND",
         "heat_alert_fn": heat_alert_imd,
+        # Open Buildings v3 has zero coverage over Europe (confirmed directly) - see
+        # build_building_stats_dataset(). Delhi-only, same as JJ clusters below.
+        "has_building_data": True,
         "ward_source_note": (
             "Ward boundaries: datameet/Municipal_Spatial_Data (CC-BY-SA 2.5 India), "
             "pre-2022 delimitation (erstwhile North/South/East Delhi Municipal "
@@ -1449,8 +1562,17 @@ def main() -> None:
                 print(f"[{slug}] Wrote historical_trends.json ({len(historical_output['monthly_land_cover_lst'])} rows)")
             except Exception as exc:
                 print(f"[{slug}] Historical trends precompute failed, leaving previous historical_trends.json in place if any: {exc}")
+
+            if city.get("has_building_data"):
+                try:
+                    building_output = build_building_stats_dataset(region)
+                    with open(os.path.join(out_dir, "building_stats.json"), "w", encoding="utf-8") as f:
+                        json.dump(building_output, f, ensure_ascii=True)
+                    print(f"[{slug}] Wrote building_stats.json ({building_output['building_count']} buildings)")
+                except Exception as exc:
+                    print(f"[{slug}] Building stats precompute failed, leaving previous building_stats.json in place if any: {exc}")
         else:
-            print(f"[{slug}] Skipping historical_trends.json this run (weekly job, seeded copy from previous publish stays in place)")
+            print(f"[{slug}] Skipping historical_trends.json/building_stats.json this run (weekly job, seeded copies from previous publish stay in place)")
 
         try:
             weather_output = build_weather_dataset(city)

@@ -35,6 +35,8 @@ Static, precomputed dashboard that cross-references satellite-measured urban hea
   - [Ward Vulnerability Score](#ward-vulnerability-score)
   - [JJ Cluster Overlay & Vulnerability-Score Comparison](#jj-cluster-overlay--vulnerability-score-comparison)
   - [Air Quality & Pollution](#air-quality--pollution)
+  - [Flood Risk (elevation percentile proxy)](#flood-risk-elevation-percentile-proxy)
+  - [Building Footprints & Count (Delhi only)](#building-footprints--count-delhi-only)
 - [Known Limitations](#known-limitations)
 - [Project Structure](#project-structure)
 - [Static Frontend Setup (GitHub Pages)](#static-frontend-setup-github-pages)
@@ -284,6 +286,24 @@ Unlike the JJ-cluster/elderly-population layer above, this is **one shared imple
 >
 > **What we actually found, checked against the live data at the time of writing:** Delhi's NO₂-vs-vulnerability-score correlation is weak and slightly negative (r ≈ -0.09), while Münster's is moderate and positive (r ≈ 0.41) — the same weak-Delhi/stronger-Münster pattern already seen with the JJ-cluster and elderly-population correlations above, not a coincidence specific to one variable. Exact values drift slightly run to run (LST/NDVI/NO₂ are all recomputed from a rolling window every 6 hours), so treat the pattern as the finding, not the specific digits.
 
+### Flood Risk (elevation percentile proxy)
+
+`build_flood_risk_layer()` classifies USGS SRTM 30m elevation (`USGS/SRTMGL1_003`) into 5 relative-risk buckets, using each city's **own** elevation percentiles (10th/30th/70th/90th, computed over the real city boundary via `reduceRegion`) as the class breaks — not a fixed absolute-meters threshold, since Delhi's real spread (≈174-322m) and Münster's (≈50-72m at the 10th-90th percentile) aren't comparable on the same absolute scale. Rendered as a `getMapId()` raster layer (toggle: "🌊 Flood Risk", off by default), same pattern as LST/NDVI/Land Cover, with a 5-stop blue ramp (`FLOOD_RISK_PALETTE`) deliberately distinct from the site's ember UI accent — this is a cartographic convention for a map layer, not chrome.
+
+> [!NOTE]
+> **Honesty note:** this is a relative elevation-risk proxy, not an official flood-hazard map. The lowest-lying 10% of a city's own terrain is flagged as highest relative risk *within that city* — it says nothing about rainfall intensity, storm-water drainage capacity, river discharge, or soil permeability, all of which matter at least as much as elevation for actual flood risk, and none of which this layer models. `map_layers.json`'s `layers.flood_risk.elevation_stats` carries the real percentile breakpoints for the run that produced it, and `honesty_note` repeats this same caveat in the raw data itself.
+
+### Building Footprints & Count (Delhi only)
+
+`build_building_stats_dataset()` queries Google Open Buildings v3 (`GOOGLE/Research/open-buildings/v3/polygons`), an AI building-footprint dataset detected from satellite imagery, filtered to the city's real boundary. Delhi's real count, confirmed by direct timing against the live Earth Engine service: **2,432,335 buildings across 1,487 km²** (~1,635/km², ~154s for the `FeatureCollection.size()` call). A `ee.Image().paint()` footprint raster is published alongside the count so the "Building Footprints" toggle has something to actually show on the map, not just a headline number.
+
+Because `FeatureCollection.size()` over a whole city is a genuinely expensive server-side vector scan (confirmed directly: a ~120 km² sub-area alone took ~33s, and cost did not scale down proportionally for smaller areas — there's a large fixed per-call cost), `building_stats.json` is only (re)computed on the same weekly cadence as `historical_trends.json` (`should_run_weekly_job()`), not every 6-hourly run — reasonable since Open Buildings v3 is a static satellite-derived snapshot, not something that changes hour to hour.
+
+> [!IMPORTANT]
+> **Delhi-only, and this is a real coverage limit, not an oversight:** Open Buildings v3's stated coverage is the Global South (Africa, South/Southeast Asia, Latin America, Caribbean, Middle East) — confirmed directly by querying Münster's bbox and getting back exactly zero features. There is no equivalent building-footprint layer for Münster on this site; the stat chip and toggle are hidden entirely there (`row-buildings`/`stat-buildings-chip` stay `display:none` when `building_stats.json` 404s) rather than shown empty or backfilled with a different, non-comparable source.
+>
+> **This is a detection count from a computer-vision model, not a municipal building registry or census.** Small or low-confidence structures can be missed, and Google does not manually verify individual detections — treat 2.43M as "what this specific model found in this imagery," a real and useful number, but not an authoritative civic record.
+
 ---
 
 ## Known Limitations
@@ -297,6 +317,8 @@ Unlike the JJ-cluster/elderly-population layer above, this is **one shared imple
 - **`uhi_air_c` uses a citywide-mean reference, not a dedicated rural station** — see [Urban Heat Island Intensity — Air](#urban-heat-island-intensity--air-uhi_air_c).
 - **Heat alerts for Münster are a simplified proxy for DWD's Hitzewarnung system**, using OpenWeather's `feels_like` against DWD's real thresholds rather than the official Klima-Michel model — see [Live Weather & Heat Alerts](#live-weather--heat-alerts).
 - **Münster's elderly-population grid undercounts small-population cells** due to German federal statistical disclosure control suppressing small counts — see [JJ Cluster Overlay & Vulnerability-Score Comparison](#jj-cluster-overlay--vulnerability-score-comparison).
+- **Flood Risk is a relative elevation-percentile proxy, not an official flood-hazard map** — no rainfall, drainage, or river-discharge modeling — see [Flood Risk (elevation percentile proxy)](#flood-risk-elevation-percentile-proxy).
+- **Building count/footprints are Delhi-only** (Open Buildings v3 has zero coverage over Europe) and come from an unverified computer-vision detection model, not a civic registry — see [Building Footprints & Count (Delhi only)](#building-footprints--count-delhi-only).
 - **All map layers and analytics reflect the last successful precompute run** (every 6h), not the live moment when a page is loaded — true for both cities.
 - **3D building extrusion relies on crowdsourced OSM building footprints/heights**, which are far more complete for Münster (well-mapped German city) than for Delhi (OSM building coverage in Indian cities is comparatively sparse and inconsistently tagged with height) — expect visibly patchier building coverage in Delhi. Buildings without a `render_height` value fall back to a flat 5m estimate rather than being omitted, so extrusion height for untagged buildings is a placeholder, not a measurement.
 - **Photorealistic 3D is a free-tier Cesium ion feature, not a permanent guarantee.** It's capped at 1,000 root-tile requests/month **account-wide** (shared across every visitor to the site, not per-visitor) — once exhausted for the month, the layer will fail to load until the quota resets, rather than degrading gracefully to a lower-detail view. The free tier is also restricted to non-commercial/individual use per Cesium ion's terms. Unlike the OpenFreeMap buildings layer, this is a full opaque mesh of the entire visible surface, so enabling it replaces the map's heat/vegetation/land-cover visualization rather than layering on top of it — it's an "explore" mode, not an additional data layer. The LST/NDVI/land-cover and boundary layers drawn on top of the mesh (see above) are themselves rendered at half opacity specifically to soften that replacement — they blend with the mesh rather than fully hiding it in turn.
@@ -437,4 +459,4 @@ For educational and research use.
 
 ## Last Updated
 
-August 19, 2026 (map page rebuilt around a persistent sidebar with its own visual identity — see [Visual Design](#visual-design) — replacing the earlier floating-panel layout; `analytics.html`/`roadmap.html`/`about.html` re-themed via the same shared design tokens)
+August 19, 2026 (added Flood Risk — an SRTM elevation-percentile relative-risk map layer — and a real Delhi building count/footprint layer from Google Open Buildings v3; see [Flood Risk](#flood-risk-elevation-percentile-proxy) and [Building Footprints & Count](#building-footprints--count-delhi-only). Also confirmed Photorealistic 3D's deck.gl layer-wrapping already worked for Münster with no code changes needed — it's fully city-agnostic, the appearance of it not working in an early manual check was just the tileset needing longer than expected to load. Map page rebuilt around a persistent sidebar with its own visual identity — see [Visual Design](#visual-design) — replacing the earlier floating-panel layout; `analytics.html`/`roadmap.html`/`about.html` re-themed via the same shared design tokens)
