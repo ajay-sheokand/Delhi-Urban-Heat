@@ -224,6 +224,17 @@ async function loadBuildingStats() {
         `(~${Math.round(data.density_per_km2).toLocaleString()}/km²). ${data.honesty_note}`;
 
     wireToggle("toggle-buildings", "buildings-layer", "legend-buildings");
+
+    // Every other map_layers.json-backed layer (LST/NDVI/land cover/pollutants/flood-risk)
+    // gets its rasterLayerCache entry synchronously inside loadMapLayers(), before anything
+    // can have triggered the Photorealistic 3D overlay yet. building_stats.json is fetched
+    // separately and later (its own network round-trip, Delhi-only), so if a user switches
+    // Photorealistic 3D on before this resolves, buildRasterOverlayLayers() already ran once
+    // and skipped "buildings" (no cache entry yet) - and nothing else was going to call
+    // syncBoundaryOverlayLayers() again just because this fetch finished afterward. Explicitly
+    // re-syncing here closes that gap: harmless no-op if 3D isn't active (syncBoundaryOverlayLayers
+    // checks photorealisticActive itself), but fixes the real case where it is.
+    syncBoundaryOverlayLayers();
 }
 
 function formatCompactCount(n) {
@@ -593,6 +604,16 @@ async function loadDistrictBoundaries() {
     map.on("mouseenter", "district-fill", () => (map.getCanvas().style.cursor = "pointer"));
     map.on("mouseleave", "district-fill", () => (map.getCanvas().style.cursor = ""));
 
+    // See the matching comment in loadBuildingStats() for the full explanation: this is its
+    // own independent fetch (started alongside, not inside, loadMapLayers() - see the
+    // Promise.all() in the bootstrap below), so if a user enables Photorealistic 3D before it
+    // resolves, buildBoundaryOverlayLayers() runs once with districtGeojsonCache still null
+    // and permanently omits district lines from the mesh until some other toggle happens to
+    // fire a resync. Low-probability in practice (this fetch is small/fast), but the failure
+    // mode is silent and easy to mistake for a real bug in the overlay code itself rather than
+    // a load-order race, so it's worth closing here too, not just for buildings.
+    syncBoundaryOverlayLayers();
+
     let districtStats = [];
     try {
         const res = await fetch(cityDataPath("district_analytics.json"), { cache: "no-store" });
@@ -656,6 +677,11 @@ async function loadWardBoundaries() {
 
     map.on("mouseenter", "ward-fill", () => (map.getCanvas().style.cursor = "pointer"));
     map.on("mouseleave", "ward-fill", () => (map.getCanvas().style.cursor = ""));
+
+    // Same load-order race as loadDistrictBoundaries()/loadBuildingStats() - see those
+    // comments. wardGeojsonCache is only usable by buildBoundaryOverlayLayers() from this
+    // point on, so resync here too in case Photorealistic 3D was switched on first.
+    syncBoundaryOverlayLayers();
 
     let wardStats = [];
     try {
@@ -760,6 +786,11 @@ async function loadComplementaryLayer() {
 
     map.on("mouseenter", "complementary-fill", () => (map.getCanvas().style.cursor = "pointer"));
     map.on("mouseleave", "complementary-fill", () => (map.getCanvas().style.cursor = ""));
+
+    // Same load-order race as loadDistrictBoundaries()/loadBuildingStats() - see those
+    // comments. complementaryGeojsonCache is only usable by buildBoundaryOverlayLayers()
+    // from this point on, so resync here too in case Photorealistic 3D was switched on first.
+    syncBoundaryOverlayLayers();
 
     map.on("click", "complementary-fill", (e) => {
         const html = complementaryFeaturePopupHtml(e.features[0].properties);

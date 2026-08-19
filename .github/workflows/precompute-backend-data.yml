@@ -57,7 +57,7 @@ jobs:
           git fetch origin gh-pages --depth=1 2>/dev/null || true
           for city in delhi muenster; do
             mkdir -p "backend-data/$city"
-            for f in timeseries_scenes.json map_layers.json district_analytics.json weather.json historical_trends.json ward_vulnerability.json; do
+            for f in timeseries_scenes.json map_layers.json district_analytics.json weather.json historical_trends.json ward_vulnerability.json building_stats.json; do
               if git show origin/gh-pages:"$city/$f" > "backend-data/$city/$f.tmp" 2>/dev/null; then
                 mv "backend-data/$city/$f.tmp" "backend-data/$city/$f"
               else
