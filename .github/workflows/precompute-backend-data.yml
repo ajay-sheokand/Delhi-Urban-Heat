@@ -7,6 +7,10 @@ on:
         description: "Recompute historical_trends.json now instead of waiting for the weekly cadence"
         type: boolean
         default: false
+      skip_pollutants:
+        description: "Diagnostic: skip the NO2/CO/CH4 Sentinel-5P map layers and the ward-level NO2 correlation this run"
+        type: boolean
+        default: false
   schedule:
     - cron: "0 */6 * * *"
 
@@ -73,6 +77,7 @@ jobs:
           PRECOMPUTE_DAYS: ${{ secrets.PRECOMPUTE_DAYS }}
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
           FORCE_HISTORICAL_TRENDS: ${{ github.event.inputs.force_historical_trends }}
+          SKIP_POLLUTANTS: ${{ github.event.inputs.skip_pollutants }}
         run: |
           python scripts/precompute_timeseries_backend.py
 

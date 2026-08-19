@@ -631,13 +631,25 @@ def build_map_layers_dataset(
         print(f"Flood risk layer calculation failed: {exc}")
         flood_risk_layer = None
 
-    no2_layer = pollutant_layer(
-        no2_image, "tropospheric_NO2_column_number_density", "COPERNICUS/S5P/OFFL/L3_NO2", NO2_PALETTE
-    )
-    co_layer = pollutant_layer(co_image, "CO_column_number_density", "COPERNICUS/S5P/OFFL/L3_CO", CO_PALETTE)
-    ch4_layer = pollutant_layer(
-        ch4_image, "CH4_column_volume_mixing_ratio_dry_air", "COPERNICUS/S5P/OFFL/L3_CH4", CH4_PALETTE
-    )
+    # Diagnostic-only escape hatch (workflow_dispatch input, never the schedule): lets a
+    # manual run skip the three Sentinel-5P pollutant layers entirely - each is its own
+    # reduceRegion + getMapId, with NO2/CO having a 90-day retry composite on top if the
+    # primary window comes back empty - to isolate whether a slow/stuck run is coming from
+    # these calls specifically. Every downstream consumer already treats a missing
+    # no2/co/ch4 layer as "no data this run, omit it" (see pollutant_layer's own docstring),
+    # so skipping is a true no-op on the published schema, not a special case.
+    skip_pollutants = os.environ.get("SKIP_POLLUTANTS", "").strip().lower() == "true"
+    if skip_pollutants:
+        print("SKIP_POLLUTANTS=true - omitting NO2/CO/CH4 map layers this run")
+        no2_layer = co_layer = ch4_layer = None
+    else:
+        no2_layer = pollutant_layer(
+            no2_image, "tropospheric_NO2_column_number_density", "COPERNICUS/S5P/OFFL/L3_NO2", NO2_PALETTE
+        )
+        co_layer = pollutant_layer(co_image, "CO_column_number_density", "COPERNICUS/S5P/OFFL/L3_CO", CO_PALETTE)
+        ch4_layer = pollutant_layer(
+            ch4_image, "CH4_column_volume_mixing_ratio_dry_air", "COPERNICUS/S5P/OFFL/L3_CH4", CH4_PALETTE
+        )
 
     layers = {
         "lst": {
@@ -985,13 +997,19 @@ def build_ward_vulnerability_dataset(
     pop_by_ward = {f["properties"].get("ward_no"): f["properties"].get("sum") for f in pop_rows}
 
     # Separate reduceRegions call (not batched with LST/NDVI above) since Sentinel-5P's
-    # native ~1.1km pixel needs scale=1113, not the 100m scale LST/NDVI use.
-    no2_rows = (
-        no2_image.rename("NO2")
-        .reduceRegions(collection=ward_fc, reducer=ee.Reducer.mean(), scale=1113, tileScale=4)
-        .getInfo()
-        .get("features", [])
-    )
+    # native ~1.1km pixel needs scale=1113, not the 100m scale LST/NDVI use. Same
+    # SKIP_POLLUTANTS diagnostic escape hatch as build_map_layers_dataset's pollutant
+    # layers - mean_no2/no2_correlation_r just come back null for every ward (already a
+    # normal, handled outcome via pearson_correlation's own len()>10 guard), not a crash.
+    if os.environ.get("SKIP_POLLUTANTS", "").strip().lower() == "true":
+        no2_rows = []
+    else:
+        no2_rows = (
+            no2_image.rename("NO2")
+            .reduceRegions(collection=ward_fc, reducer=ee.Reducer.mean(), scale=1113, tileScale=4)
+            .getInfo()
+            .get("features", [])
+        )
     # reduceRegions() names a mean()-reduced SINGLE-band image's output property "mean" (the
     # reducer's own name), not the band name - unlike the LST+NDVI case above, where reducing
     # a multi-band image keeps each band's own name ("LST"/"NDVI"). The .rename("NO2") above
