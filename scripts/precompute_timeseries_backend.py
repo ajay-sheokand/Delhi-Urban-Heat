@@ -478,13 +478,37 @@ def build_flood_risk_layer(region: ee.Geometry) -> dict:
     }
 
 
+def build_building_footprint_layer(region: ee.Geometry) -> dict:
+    """Cheap half of what used to be build_building_stats_dataset(): just a paint()+getMapId()
+    tile layer (lazy, no .getInfo() needed - Earth Engine doesn't compute anything client-side
+    for this, unlike the count below), so it's called from build_map_layers_dataset() and gets
+    a FRESH mapid every 6-hourly run, same as every other map layer.
+    This split exists because of a real bug found in production: the tile URL used to be
+    generated only alongside the expensive count (see build_building_stats_dataset()'s
+    docstring), which only runs on the weekly cadence - but Earth Engine's getMapId() tile
+    tokens expire well within a week (confirmed directly: tiles from a mapid generated
+    2026-08-24 were already returning 401 by 2026-08-26, ~2 days later), so the footprint
+    layer was silently serving broken tiles for most of every week. The count itself is a
+    static satellite-derived snapshot that's fine to leave stale for a week; the tile-serving
+    token is not."""
+    buildings = ee.FeatureCollection("GOOGLE/Research/open-buildings/v3/polygons").filterBounds(region)
+    footprint_image = ee.Image().paint(buildings, 1).clip(region)
+    mapid = footprint_image.getMapId({"palette": ["#123d6b"]})
+    return {
+        "tile_url": mapid["tile_fetcher"].url_format,
+        "opacity": 0.55,
+        "source": "Google Open Buildings v3 (GOOGLE/Research/open-buildings/v3/polygons), AI-detected building footprints from satellite imagery",
+    }
+
+
 def build_building_stats_dataset(region: ee.Geometry) -> dict:
     """Real building count from Google Open Buildings v3 (AI-detected footprints from
     satellite imagery), not an estimate. FeatureCollection.size() over a full city is
     expensive (~2.5 min for Delhi's 1,487 km^2, confirmed by direct timing) - fine for
     a job that only runs on should_run_weekly_job()'s cadence, not every 6-hourly run,
     since the underlying dataset is a static satellite-derived snapshot that doesn't
-    change hour to hour anyway.
+    change hour to hour anyway. The tile URL used to live here too - see
+    build_building_footprint_layer()'s docstring for why it was moved out.
     Open Buildings v3's coverage is the Global South (Africa/South/Southeast Asia/Latin
     America) - it has zero features over Europe, confirmed directly, which is why this
     is only wired up for Delhi in get_city_configs(), not Münster."""
@@ -492,15 +516,11 @@ def build_building_stats_dataset(region: ee.Geometry) -> dict:
     count = buildings.size().getInfo()
     area_km2 = region.area(1).divide(1e6).getInfo()
 
-    footprint_image = ee.Image().paint(buildings, 1).clip(region)
-    mapid = footprint_image.getMapId({"palette": ["#123d6b"]})
-
     return {
         "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "building_count": count,
         "area_km2": area_km2,
         "density_per_km2": count / area_km2 if area_km2 else None,
-        "footprint_tile_url": mapid["tile_fetcher"].url_format,
         "source": "Google Open Buildings v3 (GOOGLE/Research/open-buildings/v3/polygons), AI-detected building footprints from satellite imagery",
         "honesty_note": (
             "Real count from Google's satellite-derived building-detection model, not "
@@ -521,6 +541,7 @@ def build_map_layers_dataset(
     ch4_image: ee.Image,
     start_dt,
     end_dt,
+    has_building_data: bool = False,
 ) -> dict:
     lst_clipped = lst_image.clip(region)
     ndvi_clipped = ndvi_image.clip(region)
@@ -631,6 +652,14 @@ def build_map_layers_dataset(
         print(f"Flood risk layer calculation failed: {exc}")
         flood_risk_layer = None
 
+    buildings_layer = None
+    if has_building_data:
+        try:
+            buildings_layer = build_building_footprint_layer(region)
+        except Exception as exc:
+            print(f"Building footprint layer calculation failed: {exc}")
+            buildings_layer = None
+
     # Diagnostic-only escape hatch (workflow_dispatch input, never the schedule): lets a
     # manual run skip the three Sentinel-5P pollutant layers entirely - each is its own
     # reduceRegion + getMapId, with NO2/CO having a 90-day retry composite on top if the
@@ -676,6 +705,9 @@ def build_map_layers_dataset(
     }
     if flood_risk_layer is not None:
         layers["flood_risk"] = flood_risk_layer
+
+    if buildings_layer is not None:
+        layers["buildings"] = buildings_layer
 
     # NO2/CO/CH4 can come back None (see pollutant_layer) when a pollutant has no valid
     # retrievals even after the wider retry composite - omit the key entirely rather than
@@ -1542,7 +1574,8 @@ def main() -> None:
 
         try:
             map_layers_output = build_map_layers_dataset(
-                region, lst_image, ndvi_image, no2_image, co_image, ch4_image, composite_start, composite_end
+                region, lst_image, ndvi_image, no2_image, co_image, ch4_image, composite_start, composite_end,
+                has_building_data=bool(city.get("has_building_data")),
             )
             with open(os.path.join(out_dir, "map_layers.json"), "w", encoding="utf-8") as f:
                 json.dump(map_layers_output, f, ensure_ascii=True)

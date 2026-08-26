@@ -122,7 +122,7 @@ async function loadMapLayers() {
     document.getElementById("data-updated").textContent =
         `Map data last updated: ${data.generated_at_utc || "unknown"}`;
 
-    const { lst, ndvi, land_cover, no2, co, ch4, flood_risk } = data.layers;
+    const { lst, ndvi, land_cover, no2, co, ch4, flood_risk, buildings } = data.layers;
 
     addRasterLayer("lst", lst.tile_url, lst.opacity, true);
     addRasterLayer("ndvi", ndvi.tile_url, ndvi.opacity, false);
@@ -157,7 +157,8 @@ async function loadMapLayers() {
     wirePollutantLayer("ch4", ch4, "toggle-ch4", "legend-ch4", (v) => `${v.toFixed(0)} ppb`);
 
     wireFloodRiskLayer(flood_risk);
-    loadBuildingStats();
+    wireBuildingFootprintsLayer(buildings);
+    loadBuildingCount();
 }
 
 // SRTM-elevation relative-risk proxy (see build_flood_risk_layer() in the precompute
@@ -190,13 +191,36 @@ function wireFloodRiskLayer(layerData) {
     wireToggle("toggle-flood-risk", "flood-risk-layer", "legend-flood-risk");
 }
 
-// Real building count from Google Open Buildings v3 (see build_building_stats_dataset())
-// - Delhi-only, since that dataset has zero coverage over Europe. building_stats.json only
-// exists for cities with has_building_data set, and even there it's only (re)computed on
-// should_run_weekly_job()'s cadence (a ~2.5-minute FeatureCollection.size() over the whole
-// city, not worth re-running every 6 hours for a static satellite-derived dataset) - a 404
-// here just means "not applicable to this city" or "not computed yet", not an error.
-async function loadBuildingStats() {
+// Building footprint TILE layer, from map_layers.json (see build_building_footprint_layer())
+// - Delhi-only, since Open Buildings v3 has zero coverage over Europe. Split out from the
+// building COUNT (loadBuildingCount() below) after a real production bug: this used to be
+// generated only alongside the expensive weekly-cadence count, but Earth Engine's getMapId()
+// tile tokens expire well within a week, so the tile was silently 401ing for most of every
+// week even though the layer looked fine in map_layers.json's own schema. Regenerating this
+// every 6-hourly run (cheap - no .getInfo() needed) like every other map layer fixes that.
+// The row's visibility is driven by whether this TILE exists, not by the count - the count
+// can be briefly behind (its own weekly fetch) without the toggle/layer itself being broken.
+function wireBuildingFootprintsLayer(layerData) {
+    const row = document.getElementById("row-buildings");
+    if (!layerData) {
+        if (row) row.style.display = "none";
+        const legend = document.getElementById("legend-buildings");
+        if (legend) legend.style.display = "none";
+        return;
+    }
+    if (row) row.style.display = "";
+    addRasterLayer("buildings", layerData.tile_url, layerData.opacity, false);
+    rasterLayerCache["buildings"] = { tileUrl: layerData.tile_url, opacity: layerData.opacity };
+    document.getElementById("legend-buildings-note").textContent = layerData.source || "";
+    wireToggle("toggle-buildings", "buildings-layer", "legend-buildings");
+}
+
+// Real building COUNT from Google Open Buildings v3 (see build_building_stats_dataset()) -
+// only (re)computed on should_run_weekly_job()'s cadence, not worth re-running every 6 hours
+// for a static satellite-derived dataset. Purely additive to wireBuildingFootprintsLayer()
+// above: fills in the stat chip and a richer legend note once/if it loads, but the footprint
+// layer itself doesn't depend on it. A 404 here just means "not computed yet", not an error.
+async function loadBuildingCount() {
     let data;
     try {
         const res = await fetch(cityDataPath("building_stats.json"), { cache: "no-store" });
@@ -211,19 +235,12 @@ async function loadBuildingStats() {
     statEl.textContent = formatCompactCount(data.building_count);
     statEl.title = `${data.building_count.toLocaleString()} buildings detected`;
 
-    const row = document.getElementById("row-buildings");
-    row.style.display = "";
     document.getElementById("toggle-buildings-label").textContent =
         `Building Footprints (${formatCompactCount(data.building_count)} detected)`;
-
-    addRasterLayer("buildings", data.footprint_tile_url, 0.55, false);
-    rasterLayerCache["buildings"] = { tileUrl: data.footprint_tile_url, opacity: 0.55 };
 
     document.getElementById("legend-buildings-note").textContent =
         `${data.building_count.toLocaleString()} buildings across ${data.area_km2.toFixed(0)} km² ` +
         `(~${Math.round(data.density_per_km2).toLocaleString()}/km²). ${data.honesty_note}`;
-
-    wireToggle("toggle-buildings", "buildings-layer", "legend-buildings");
 
     // Every other map_layers.json-backed layer (LST/NDVI/land cover/pollutants/flood-risk)
     // gets its rasterLayerCache entry synchronously inside loadMapLayers(), before anything
