@@ -333,19 +333,37 @@ function hexToRgb(hex, alpha) {
     return [(n >> 16) & 255, (n >> 8) & 255, n & 255, alpha];
 }
 
-// Draping 2D data onto the photorealistic mesh's real geometry (deck.gl's TerrainExtension)
-// is a confirmed, unresolved upstream bug in interleaved mode (visgl/deck.gl#7893). A simpler
-// fix — just reordering the flat MapLibre boundary layers to draw after the mesh — does NOT
-// work either: once the interleaved 3D layer writes real depth values, MapLibre's own 2D
-// layers get depth-tested against it regardless of paint order, so they stay fully hidden
-// (verified directly, not assumed). What does work: render the boundaries as deck.gl
-// GeoJsonLayers in the same interleaved overlay with { depthCompare: "always" } (deck.gl
-// 9.1+ renamed the old depthTest:false parameter to align with WebGPU), which bypasses
-// depth comparison entirely instead of relying on draw order.
+// Earlier approach (kept here for the record, since it's a real and non-obvious finding):
+// draping 2D data onto the photorealistic mesh's real geometry via deck.gl's TerrainExtension
+// is a confirmed, unresolved upstream bug specifically in INTERLEAVED mode (visgl/deck.gl#7893,
+// reproduced by a deck.gl maintainer). The fallback used then - depthCompare:"always" on a
+// flat GeoJsonLayer/TileLayer - bypasses depth testing entirely, so it draws on top of the
+// mesh, but as a flat plane with no relationship to the mesh's actual geometry: it "wraps"
+// only in the sense of "always visible above," not in the sense of following real building
+// rooftops/terrain contours.
+//
+// Fix, confirmed directly (not assumed) with an isolated test page against the live tileset:
+// TerrainExtension's interleaved-mode bug does NOT reproduce in deck.gl's default
+// non-interleaved overlay mode (a separate canvas layered on top of MapLibre's, rather than
+// sharing its WebGL context/draw order). With interleaved:false, Tile3DLayer given
+// operation:"terrain+draw" (serving as both the rendered mesh AND a terrain source other
+// layers can drape onto), and every overlay layer given extensions:[new deck._TerrainExtension()]
+// + terrainDrawMode:"drape", the data genuinely conforms to the mesh surface - screenshotted
+// directly: a test boundary line sits exactly along real ground/building edges rather than
+// floating as a disconnected flat rectangle. The MapLibre-interleaving this gives up doesn't
+// cost anything here: when Photorealistic 3D is active, MapLibre's own 2D layers are already
+// irrelevant underneath the opaque mesh, so there was nothing meaningful to interleave with.
+//
 // Drawn at half opacity (on top of each layer's own per-color alpha) so the photorealistic
 // mesh underneath - kept fully opaque itself - still reads through the data, rather than
 // the data fully hiding it wherever it's toggled on.
 const PHOTOREALISTIC_OVERLAY_OPACITY = 0.5;
+
+// Shared by every overlay layer below - real terrain-conforming drape, not the old
+// depthCompare:"always" flat-plane fallback. See the comment above for the full story.
+function terrainDrapeProps() {
+    return { extensions: [new deck._TerrainExtension()], terrainDrawMode: "drape" };
+}
 
 function buildBoundaryOverlayLayers() {
     const layers = [];
@@ -360,7 +378,7 @@ function buildBoundaryOverlayLayers() {
                 lineWidthMinPixels: 1.5,
                 opacity: PHOTOREALISTIC_OVERLAY_OPACITY,
                 visible: document.getElementById("toggle-districts").checked,
-                parameters: { depthCompare: "always", depthWriteEnabled: false },
+                ...terrainDrapeProps(),
             })
         );
     }
@@ -380,7 +398,7 @@ function buildBoundaryOverlayLayers() {
                 lineWidthMinPixels: 2.5,
                 opacity: PHOTOREALISTIC_OVERLAY_OPACITY,
                 visible: document.getElementById("toggle-wards").checked,
-                parameters: { depthCompare: "always", depthWriteEnabled: false },
+                ...terrainDrapeProps(),
             })
         );
     }
@@ -400,7 +418,7 @@ function buildBoundaryOverlayLayers() {
                 lineWidthMinPixels: 1,
                 opacity: PHOTOREALISTIC_OVERLAY_OPACITY,
                 visible: document.getElementById("toggle-jj-clusters").checked,
-                parameters: { depthCompare: "always", depthWriteEnabled: false },
+                ...terrainDrapeProps(),
             })
         );
     }
@@ -409,8 +427,9 @@ function buildBoundaryOverlayLayers() {
 
 // LST/NDVI/land-cover are the same Earth Engine XYZ tile URLs used by the flat MapLibre
 // raster layers (addRasterLayer) - reused here as deck.gl TileLayers, each wrapping
-// BitmapLayer sublayers, with depthCompare: "always" so they draw over the opaque
-// photorealistic mesh instead of being hidden under it like the native MapLibre layers are.
+// BitmapLayer sublayers, with terrainDrapeProps() so they genuinely conform to the
+// photorealistic mesh's surface instead of floating as a flat plane above it (or being
+// hidden under it like the native MapLibre layers are).
 // TileLayer's default tile-data path decodes fetched tiles via a loaders.gl ImageLoader,
 // which this page never loads (only deck.gl core + @loaders.gl/3d-tiles are on the page,
 // and deck.gl's own UMD bundle doesn't bundle @loaders.gl/images) - with no loader to decode
@@ -450,7 +469,7 @@ function buildRasterOverlayLayers() {
                 // the flat-map value and unrelated to how this should look over Photorealistic 3D.
                 opacity: PHOTOREALISTIC_OVERLAY_OPACITY,
                 visible: checkbox.checked,
-                parameters: { depthCompare: "always", depthWriteEnabled: false },
+                ...terrainDrapeProps(),
                 getTileData: fetchTileImage,
                 renderSubLayers: (props) => {
                     const { bbox } = props.tile;
@@ -458,7 +477,7 @@ function buildRasterOverlayLayers() {
                         data: null,
                         image: props.data,
                         bounds: [bbox.west, bbox.south, bbox.east, bbox.north],
-                        parameters: { depthCompare: "always", depthWriteEnabled: false },
+                        ...terrainDrapeProps(),
                     });
                 },
             })
@@ -490,6 +509,9 @@ async function buildPhotorealisticLayer() {
         id: "google-photorealistic-3d-tiles",
         data: endpoint.options.url,
         loaders: [loaders.Tiles3DLoader],
+        // Serves as both the rendered mesh AND the terrain surface every other overlay
+        // layer's terrainDrapeProps() drapes onto (see the comment above buildBoundaryOverlayLayers).
+        operation: "terrain+draw",
     });
 }
 
@@ -499,7 +521,10 @@ function wirePhotorealisticToggle() {
     checkbox.addEventListener("change", async () => {
         if (checkbox.checked) {
             if (!photorealisticOverlay) {
-                photorealisticOverlay = new deck.MapboxOverlay({ interleaved: true, layers: [] });
+                // interleaved:false (deck.gl's own separate overlay canvas, not sharing
+                // MapLibre's WebGL context) - see the comment above buildBoundaryOverlayLayers()
+                // for why this is required for TerrainExtension's drape mode to actually work.
+                photorealisticOverlay = new deck.MapboxOverlay({ interleaved: false, layers: [] });
                 map.addControl(photorealisticOverlay);
             }
             try {
