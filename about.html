@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title id="page-title">About | Delhi Urban Heat Monitor</title>
+    <meta name="description" id="page-description" content="Why this dashboard exists: cross-referencing satellite-measured heat with who's actually vulnerable to it, instead of just mapping temperature." />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%A7%AD</text></svg>" />
+    <link rel="stylesheet" href="style.css" />
+    <script src="city.js"></script>
+</head>
+<body class="doc-page">
+
+    <nav class="site-nav">
+        <span class="brand" id="site-brand">🌡️ Delhi Urban Heat Monitor</span>
+        <div id="city-switcher" class="city-switcher"></div>
+        <a href="index.html" data-nav-page="index.html">Map</a>
+        <a href="analytics.html" data-nav-page="analytics.html">Analytics</a>
+        <a href="roadmap.html" data-nav-page="roadmap.html">Roadmap</a>
+        <a href="about.html" data-nav-page="about.html" class="active">About</a>
+    </nav>
+
+    <div class="page-container">
+        <div class="page-header">
+            <h1>🧭 Why This Exists</h1>
+            <p id="page-intro">A satellite thermal map tells you where it's hot. It doesn't tell you who that heat actually threatens. This project cross-references the two — at ward level, for real, verifiable numbers — instead of stopping at the temperature map.</p>
+            <div id="about-error-banner"></div>
+        </div>
+
+        <div id="finding-stats" class="stat-grid">Loading current findings…</div>
+
+        <h2 class="section-title">The Mission</h2>
+        <div class="narrative-card">
+            <h3>The Problem</h3>
+            <p id="problem-text">Land surface temperature maps are common — Landsat and Sentinel data are public, and "here's where the city is hottest" is a well-solved visualization problem by itself. What's missing in most public tools is the next step: cross-referencing that heat signal against who actually lives in the hot areas, at a granularity fine enough to act on. A citywide average hides exactly the pattern that matters — whether the hottest wards are also the densest, least-vegetated, most housing-insecure, or most pollution-burdened ones, or whether those risks are somewhere else entirely.</p>
+
+            <h3>What This Adds</h3>
+            <p>Every ward on this site's map gets the same treatment: Landsat-derived land surface temperature and NDVI, population density, a composite vulnerability score built from those, and then independent risk layers checked against that score rather than assumed to agree with it — informal-settlement locations, elderly-population density, and now Sentinel-5P NO₂ (a traffic/combustion proxy). Each comparison produces a real Pearson correlation, computed server-side from the current data, not a hardcoded number — see the live figures on the <a href="analytics.html" data-nav-page="analytics.html">Analytics page</a>.</p>
+
+            <h3 id="findings-heading">What We've Actually Found</h3>
+            <p id="findings-text">Loading current correlation findings…</p>
+            <p>These are genuinely mixed results, and that's the point of measuring rather than assuming. A low or near-zero correlation isn't a data error — it means the satellite/density-only score is blind to that particular risk, which is itself useful to know before using this kind of score to prioritize interventions.</p>
+
+            <h3>What This Is Not</h3>
+            <ul>
+                <li>Not an official heat-wave warning system — the heat-alert thresholds shown are simplified proxies inspired by IMD/DWD methodology, not their actual operational criteria (see the Data Sources section of the <a href="https://github.com/ajay-sheokand/Delhi-Urban-Heat#readme">README</a>).</li>
+                <li>Not proof of causation — every correlation on this site is an association between two measured quantities at ward level, not a claim that one causes the other.</li>
+                <li>Not ground-truth-verified pollution or population data — OpenWeather's air-quality numbers are a model estimate (SILAM), Sentinel-5P's NO₂/CO/CH₄ are column densities rather than ground-level concentrations, and WorldPop population is itself modeled. All flagged as such where they're used.</li>
+                <li>Not a live, per-visit computation — everything here comes from a precompute job that reruns every 6 hours, so it can lag real-world conditions by up to that long.</li>
+            </ul>
+
+            <h3>Methodology &amp; Data</h3>
+            <p>Every data source, formula, and known limitation behind the numbers on this site is documented in the project's <a href="https://github.com/ajay-sheokand/Delhi-Urban-Heat#readme">README</a> — that's the canonical technical reference; this page is the short version of why it was built this way.</p>
+        </div>
+    </div>
+
+    <script src="about.js"></script>
+</body>
+</html>
